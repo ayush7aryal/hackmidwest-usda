@@ -133,3 +133,23 @@ def test_tools_retain_forecasts_beyond_three_days_and_request_seven(monkeypatch)
     assert len(weather['forecast']) == 168 and weather['forecast'][-1]['windSpeed'] == '45 mph'
     assert len(aqi['forecast']) >= 168
     assert datetime.fromisoformat(aqi['forecast'][-1]['observed_at']) > now + timedelta(days=6)
+
+
+def test_independent_source_requests_run_concurrently_without_stale_cache(monkeypatch):
+    from threading import Barrier
+    from app import tools
+    both_started = Barrier(2)
+    calls = []
+    def source(name, available):
+        def fetch(lat, lng):
+            calls.append((name, lat, lng))
+            both_started.wait(timeout=2)  # Sequential fetching would fail this barrier.
+            return {'source': name, 'available': available}
+        return fetch
+    monkeypatch.setattr(tools, 'get_nws_weather', source('NWS', True))
+    monkeypatch.setattr(tools, 'get_air_quality', source('AQI', False))
+    for _ in range(2):
+        result = tools.fetch_signals(30.1766, -85.8055)
+        assert result['weather']['available'] is True
+        assert result['air_quality']['available'] is False
+    assert len(calls) == 4 and all(call[1:] == (30.1766, -85.8055) for call in calls)

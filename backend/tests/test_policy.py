@@ -225,7 +225,7 @@ def test_real_strands_openai_adapter_returns_validated_json(monkeypatch, base_ur
             "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2}})
     original_model = agent.OpenAIModel
     def model(**kwargs):
-        assert kwargs["client_args"]["max_retries"] == 1
+        assert kwargs["client_args"]["max_retries"] == 0
         kwargs["client_args"]["http_client"] = httpx2.AsyncClient(transport=httpx2.MockTransport(provider))
         return original_model(**kwargs, stream=stream)
     monkeypatch.setattr(agent, "OpenAIModel", model)
@@ -320,3 +320,27 @@ def test_model_transport_and_limit_failures_are_actionable(failure, expected):
 def test_forecast_wind_requires_explicit_sustained_mph(value, expected):
     from app.thresholds import forecast_wind_mph
     assert forecast_wind_mph(value) == expected
+
+
+def test_compact_briefing_preserves_hazard_changes_gaps_alerts_and_original_evidence():
+    import copy
+    from app.agent import briefing_context
+    data = signals(alert=alert('2026-10-12T13:00:00Z', '2026-10-12T23:00:00Z'))
+    context = policy_context(LOCATION, data, NOW)
+    context['evidence'][0]['value']['forecast'] = [
+        {'startTime': '2026-10-12T13:00:00Z', 'endTime': '2026-10-12T14:00:00Z', 'windSpeed': '10 mph', 'shortForecast': 'Cloudy'},
+        {'startTime': '2026-10-12T14:00:00Z', 'endTime': '2026-10-12T15:00:00Z', 'windSpeed': '10 mph', 'shortForecast': 'Cloudy'},
+        {'startTime': '2026-10-12T15:00:00Z', 'endTime': '2026-10-12T16:00:00Z', 'windSpeed': '45 mph', 'shortForecast': 'Thunderstorms'},
+        {'startTime': '2026-10-12T18:00:00Z', 'endTime': '2026-10-12T19:00:00Z', 'windSpeed': '45 mph', 'shortForecast': 'Thunderstorms'},
+    ]
+    original = copy.deepcopy(context)
+    compact = briefing_context(context)
+    assert len(compact['forecast']) == 3
+    assert compact['forecast'][0]['endTime'] == '2026-10-12T15:00:00Z'
+    assert compact['forecast'][1]['windSpeed'] == '45 mph'
+    assert compact['forecast'][2]['startTime'] == '2026-10-12T18:00:00Z'
+    assert compact['weather_alerts'] == original['weather_alerts']
+    assert compact['impact_windows'] == original['impact_windows']
+    assert compact['modeled_air_quality'][0]['us_aqi'] == 40
+    assert context == original
+    assert 'thresholds' not in compact and 'evidence' not in compact

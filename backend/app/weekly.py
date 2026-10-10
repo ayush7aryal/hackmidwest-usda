@@ -93,7 +93,7 @@ def window_reason(group: dict, signals: dict) -> str:
         hazards.append(f"modeled US AQI up to {max(aqi):g}")
     return (f"Your {group['shift_name']} shift on {group['date']} overlaps this affected window. "
             f"Source evidence: {'; '.join(hazards)}. The app-defined demo policy recommends "
-            f"{group['posture'].replace('_', ' ')} for this window. This is a draft; your manager decides the final action.")
+            f"{group['posture'].replace('_', ' ')} for this window.")
 
 
 def save_week(db: sqlite3.Connection, location: dict, signals: dict, days: list[dict], contexts: dict, advice: dict) -> dict:
@@ -132,8 +132,7 @@ def save_week(db: sqlite3.Connection, location: dict, signals: dict, days: list[
 
 def run_weekly_evaluation(db: sqlite3.Connection, location: dict) -> dict:
     """Fetch the same two sources once and invoke one Strands adviser once."""
-    signals = {"weather": tools.get_nws_weather(location["latitude"], location["longitude"]),
-               "air_quality": tools.get_air_quality(location["latitude"], location["longitude"])}
+    signals = tools.fetch_signals(location["latitude"], location["longitude"])
     days, contexts = week_contexts(location, signals, datetime.now(UTC))
     if not contexts:
         return {"state": "INSUFFICIENT_DATA", "days": days, "message": "No dates have sufficient source coverage; no drafts saved."}

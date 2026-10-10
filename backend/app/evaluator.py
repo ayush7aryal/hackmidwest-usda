@@ -94,8 +94,7 @@ def evaluate(path: str, location_id: int, manager_id: int | None = None, weekly:
 
 def run_evaluation(db: sqlite3.Connection, location: dict) -> dict:
     """Retain actual compact inputs and original advice for later manager edits."""
-    signals = {"weather": tools.get_nws_weather(location["latitude"], location["longitude"]),
-               "air_quality": tools.get_air_quality(location["latitude"], location["longitude"])}
+    signals = tools.fetch_signals(location["latitude"], location["longitude"])
     context = policy_context(location, signals, datetime.now(UTC))
     result = agent.validate_recommendation(agent.recommend(location, context), context)
     with db:

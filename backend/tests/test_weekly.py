@@ -8,7 +8,7 @@ import pytest
 
 from app import agent, weekly
 from app.db import connect
-from app.models import Recommendation, WeeklyAdvice
+from app.models import Evidence, Recommendation, WeeklyAdvice
 from app.thresholds import policy_context
 from test_policy import LOCATION, NOW, alert, signals
 
@@ -277,3 +277,33 @@ def test_mixed_overlapping_hazards_use_strongest_action_and_preserve_safe_gap():
         {'start': '2026-10-14T22:00:00Z', 'end': '2026-10-14T23:00:00Z', 'posture': 'EARLY_DISMISSAL'}]})
     assert [(item['start'].hour, item['end'].hour, item['posture']) for item in segments] == [
         (13, 14, 'TELEWORK'), (14, 16, 'CLOSED'), (22, 23, 'EARLY_DISMISSAL')]
+
+
+def test_weekly_prompt_deduplicates_alert_text_preserves_per_date_assessments_and_full_sources(monkeypatch):
+    import copy
+    data = week_signals()
+    data['weather']['alerts'][0]['instruction'] = 'TEST ONLY shared alert instructions'
+    _, contexts = weekly.week_contexts(LOCATION, data, NOW)
+    original = copy.deepcopy(contexts)
+    calls = []
+    answer = {'days': [{'date': day, 'posture': context['posture'], 'reason': 'TEST ONLY dated explanation of actual hazards.',
+        'confidence': .5, 'uncertainty': 'Synthetic fixture', 'what_would_change': ['New warning']}
+        for day, context in contexts.items()]}
+    def model(output_model):
+        def invoke(prompt, **kwargs):
+            calls.append(prompt)
+            return json.dumps(answer)
+        return invoke
+    monkeypatch.setattr(agent, 'build_agent', model)
+    results = agent.recommend_week(LOCATION, contexts)
+    assert len(calls) == 1
+    compact = json.loads(calls[0])
+    assert calls[0].count('TEST ONLY shared alert instructions') == 1
+    assert len(compact['weather_alerts']) == 1 and len(compact['days']) == 7
+    assessments = {item['date']: item['policy']['weather_alerts'][0]['demo_policy_assessment'] for item in compact['days']}
+    assert 'Outside' in assessments['2026-10-12']
+    assert 'Meets demo office trigger' in assessments['2026-10-14']
+    assert len(calls[0]) < len(json.dumps(contexts)) * .6
+    assert contexts == original
+    assert set(results) == set(contexts)
+    assert all(results[day].evidence == [Evidence(**entry) for entry in contexts[day]['evidence']] for day in results)

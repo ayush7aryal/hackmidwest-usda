@@ -35,7 +35,7 @@ def test_complete_evaluate_preview_edit_approve_workflow(client, headers, evalua
     saved = result.json()
     assert saved["manager_status"] == "APPROVED" and saved["reviewed_by"] == 1001
     assert saved["draft_subject"] == "Manager edited subject"
-    assert saved["draft_body"].startswith("APPROVED")
+    assert saved["draft_body"] == "Manager edited message"
     assert saved["sent_at"] is None and saved["delivery"] is None
     assert saved["alternatives"]["original_recommendation"]["reason"] == evaluated["reason"]
     assert saved["alternatives"]["original_draft"]["body"].startswith("DRAFT")
@@ -103,3 +103,38 @@ def test_new_routes_enforce_role_and_ownership(client, headers, evaluated):
     other = {"Authorization": f"Bearer {login['access_token']}"}
     assert client.post(url + "/recipients", headers=other, json={}).status_code == 404
     assert client.post(url + "/review", headers=other, json=payload(evaluated)).status_code == 404
+
+
+@pytest.mark.parametrize('prefix', [
+    'DRAFT — pending manager approval; this is not a finalized instruction.',
+    'APPROVED — reviewed by manager 1001.',
+    'REJECTED — reviewed by manager 1001.',
+])
+def test_approved_employee_message_removes_review_labels_and_legacy_draft_note(client, headers, evaluated, prefix):
+    text = ('Facility: Test office\nRecommended action: TELEWORK\n'
+            'Your shift overlaps this affected window. This is a draft; your manager decides the final action.\n'
+            'Essential personnel: contact your manager.\nManager contact: Alex Morgan\n'
+            'Keep the draft schedule spreadsheet for reference.')
+    result = client.post(f"/api/decisions/{evaluated['id']}/review", headers=headers,
+                        json=payload(evaluated, draft_body=prefix + '\n\n' + text))
+    assert result.status_code == 200
+    saved = result.json()
+    assert saved['manager_status'] == 'APPROVED' and saved['reviewed_by'] == 1001
+    assert saved['draft_body'].startswith('Facility: Test office')
+    assert 'reviewed by manager' not in saved['draft_body']
+    assert 'This is a draft;' not in saved['draft_body']
+    assert 'Essential personnel: contact your manager.' in saved['draft_body']
+    assert 'Keep the draft schedule spreadsheet' in saved['draft_body']
+    assert saved['alternatives']['original_draft'] == evaluated['alternatives']['original_draft']
+    assert saved['sent_at'] is None
+
+
+def test_existing_approved_messages_are_clean_on_read_without_rewriting_audit(client, headers, evaluated, db_path):
+    legacy = 'APPROVED — reviewed by manager 1001.\n\nFacility: Test\nWork remotely. This is a draft; your manager decides the final action.'
+    with closing(connect(db_path)) as db, db:
+        db.execute("UPDATE decisions SET manager_status='APPROVED', reviewed_by=1001, draft_body=? WHERE id=?", (legacy, evaluated['id']))
+    saved = client.get(f"/api/decisions/{evaluated['id']}", headers=headers).json()
+    assert saved['draft_body'] == 'Facility: Test\nWork remotely.'
+    assert saved['alternatives']['original_draft'] == evaluated['alternatives']['original_draft']
+    with closing(connect(db_path)) as db:
+        assert db.execute('SELECT draft_body FROM decisions WHERE id=?', (evaluated['id'],)).fetchone()[0] == legacy

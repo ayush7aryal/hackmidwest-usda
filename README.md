@@ -50,7 +50,10 @@ local data. No instance has been provisioned.
 ## Demo workflow
 
 1. Sign in and choose **Check next 7 days**. **Edit location** opens a focused
-   form for ID, name, coordinates, timezone and hours.
+   form with a separate facility name, searchable map, ID, coordinates, timezone and hours.
+   Find a US city/ZIP code or paste `latitude, longitude`; choose a result, click
+   the map or drag the pin to refine the site. Manual fields remain editable.
+   Place results set the timezone; check it when using coordinates or the map.
 2. The week strip highlights affected shifts and missing coverage. Select one
    date to see its recommendation and shift drafts; pending drafts open first.
 3. Open a draft and follow **Risk → Recipients → Message**. Choose the operational
@@ -59,12 +62,28 @@ local data. No instance has been provisioned.
    explicitly widens the audience. Confirm essential-staff instructions before
    approving. A failed recipient refresh blocks approval until retried.
 5. Save, approve or reject. Download the saved message with its recipient list.
-   Nothing is emailed. Past checks and decision records are expandable.
+   Approved message bodies and downloads omit draft/approval notices; review
+   status stays in the manager UI and audit record. Nothing is emailed. Past
+   checks and decision records are expandable.
 
 Urgent NWS instructions stay visible; advisory details, source notes, policy and
 confidence are available on demand. Missing coverage and outdated alerts remain
 explicitly labeled. Refresh failures retain the previous weekly check with a
-warning. Unsaved draft edits are protected when leaving the review flow.
+warning. Unsaved draft edits are protected when leaving the review flow. The
+operational action is emphasized in Risk; Message focuses on wording and recipients.
+An animated loader and elapsed time appear during today/week evaluations, with
+duplicate requests disabled. Both live hazard sources are fetched concurrently;
+the agent receives compact forecasts and shared alert text once per weekly check.
+Full source snapshots and exact selection windows remain unchanged. Model calls
+do not silently retry; failures preserve saved recommendations and allow a retry.
+
+The map uses Leaflet 1.9.4 and attributed [OpenStreetMap tiles](https://operations.osmfoundation.org/policies/tiles/).
+Explicit place searches use [Open-Meteo geocoding](https://open-meteo.com/en/docs/geocoding-api)
+(GeoNames data); coordinate searches stay in the browser. Map/place-search
+requests require internet access. A search/tile failure leaves manual entry usable.
+This facility-setup lookup is separate from the two Strands hazard tools; it is
+never used as weather evidence. Leaflet is the only new runtime dependency,
+needed for interactive pinning; no database table or Docker service was added.
 
 Creating a facility reuses the manager's current synthetic employee sheet: the
 manager and existing staff move to the new facility with the same employee IDs,

@@ -3,6 +3,7 @@
 import math
 import os
 import time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
 from urllib.parse import urlencode, urlparse
 
@@ -12,6 +13,14 @@ from strands import tool
 from app.db import utc_now
 
 AQI_ENDPOINT = "https://air-quality-api.open-meteo.com/v1/air-quality"
+
+
+def fetch_signals(latitude: float, longitude: float) -> dict:
+    """Read independent sources concurrently; never cache time-sensitive hazards."""
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        weather = pool.submit(get_nws_weather, latitude, longitude)
+        air_quality = pool.submit(get_air_quality, latitude, longitude)
+        return {"weather": weather.result(), "air_quality": air_quality.result()}
 
 
 def get_json(url: str, headers: dict | None = None) -> dict:

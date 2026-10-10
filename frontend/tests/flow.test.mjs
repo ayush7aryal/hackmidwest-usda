@@ -9,11 +9,11 @@ import { JSDOM } from 'jsdom'
 // Exercise the actual app with DOM events and synthetic HTTP responses. No live
 // source/model requests, email delivery, or browser automation are involved.
 const dom = new JSDOM('<!doctype html><html><body><div id="root"></div></body></html>', { url: 'http://localhost:8080/' })
-Object.assign(globalThis, { window: dom.window, document: dom.window.document, sessionStorage: dom.window.sessionStorage, IS_REACT_ACT_ENVIRONMENT: true })
+Object.assign(globalThis, { window: dom.window, document: dom.window.document, Element: dom.window.Element, sessionStorage: dom.window.sessionStorage, IS_REACT_ACT_ENVIRONMENT: true })
 window.scrollTo = () => {}
 window.confirm = () => false
 const { createRoot } = await import('react-dom/client')
-const bundle = await build({ stdin: { contents: await readFile(new URL('../src/App.jsx', import.meta.url), 'utf8'), resolveDir: new URL('../src/', import.meta.url).pathname, loader: 'jsx' }, bundle: true, write: false, platform: 'node', format: 'cjs', external: ['react'] })
+const bundle = await build({ stdin: { contents: await readFile(new URL('../src/App.jsx', import.meta.url), 'utf8'), resolveDir: new URL('../src/', import.meta.url).pathname, loader: 'jsx' }, bundle: true, write: false, platform: 'node', format: 'cjs', external: ['react'], loader: { '.css': 'empty' } })
 const module = { exports: {} }
 new Function('require', 'module', 'exports', bundle.outputFiles[0].text)(createRequire(import.meta.url), module, module.exports)
 const App = module.exports.default
@@ -66,7 +66,9 @@ beforeEach(() => {
   globalThis.fetch = async (path, options = {}) => {
     const body = options.body ? JSON.parse(options.body) : undefined
     requests.push({ path, method: options.method || 'GET', body })
-    if (path === '/api/locations') return response([fixture.office])
+    if (path === '/api/locations' && !body) return response([fixture.office])
+    if (path === '/api/locations' && options.method === 'POST') { fixture.office = { ...fixture.office, ...body }; fixture.week = null; return response(fixture.office) }
+    if (String(path).startsWith('https://geocoding-api.open-meteo.com/')) return response({ results: [{ id: 1, name: 'Panama City Beach', admin1: 'Florida', country: 'United States', latitude: 30.1766, longitude: -85.8055, timezone: 'America/Chicago' }] })
     if (path === `/api/locations/${fixture.office.id}/decisions`) return response([fixture.decision])
     if (path === `/api/locations/${fixture.office.id}/week-plan`) return response(fixture.week)
     if (path === `/api/locations/${fixture.office.id}/weather-alerts`) return response(failAlerts ? { available: false, alerts: [], error: 'Synthetic alert outage' } : { available: true, alerts: fixture.alerts, fetched_at: '2026-10-10T19:00:00Z' })
@@ -150,7 +152,7 @@ test('location editing has its own focused form and preserves coordinate/ID edit
   await mount(); await click(button('Edit location'))
   assert.equal(document.querySelector('.week-plan'), null)
   const inputs = document.querySelectorAll('.form-grid input')
-  assert.equal(inputs.length, 7)
+  assert.equal(inputs.length, 6)
   const named = title => [...document.querySelectorAll('label')].find(item => item.textContent === title).querySelector('input')
   await change(named('Location ID'), '9'); await change(named('Latitude'), '30.1766'); await change(named('Longitude'), '-85.8055')
   await click(button('Save facility'))
@@ -180,16 +182,16 @@ test('three-step review keeps excluded staff available and shows only affected-d
 test('essential confirmation gates approval and saved export includes the actual recipient list', async () => {
   await mount('#decision/14'); await click(button('Continue to recipients →')); await click(button('Continue to message →'))
   assert.equal(document.querySelector('.message-input') !== null, true)
-  assert.equal(button('Approve draft').disabled, true)
+  assert.equal(button('Approve message').disabled, true)
   await click(document.querySelector('.check-notice input'))
-  assert.equal(button('Approve draft').disabled, false)
+  assert.equal(button('Approve message').disabled, false)
   await change(document.querySelector('.message-input'), 'SYNTHETIC: Manager-approved Wednesday shift instructions.')
   assert.equal(button('Download saved message ↓').disabled, true)
-  await click(button('Approve draft'))
+  await click(button('Approve message'))
   const saved = requests.find(item => item.path.endsWith('/review'))
   assert.equal(saved.body.status, 'APPROVED'); assert.equal(saved.body.essential_confirmed, true)
   assert.equal(saved.body.draft_body, 'SYNTHETIC: Manager-approved Wednesday shift instructions.')
-  assert.match(document.querySelector('.success').textContent, /Draft approved/)
+  assert.match(document.querySelector('.success').textContent, /Message ready to download/)
   await click(button('Download saved message ↓'))
   assert.match(await downloadBlob.text(), /To: 1101@example.com, 1104@example.com/)
   assert.equal(downloadName, 'decision-14-approved.txt')
@@ -201,11 +203,11 @@ test('recipient refresh failure blocks approval until a successful retry', async
   await click(button('Continue to recipients →'))
   assert.match(document.querySelector('[role=alert]').textContent, /Synthetic recipient outage/)
   await click(button('3Message'))
-  assert.equal(button('Approve draft').matches(':disabled'), true)
+  assert.equal(button('Approve message').matches(':disabled'), true)
   failPreview = false
   await click(button('2Recipients')); await click(button('Refresh staff')); await click(button('Continue to message →'))
   await click(document.querySelector('.check-notice input'))
-  assert.equal(button('Approve draft').matches(':disabled'), false)
+  assert.equal(button('Approve message').matches(':disabled'), false)
 })
 
 test('unsaved edits can cancel navigation and recipient exclusions survive the next step', async () => {
@@ -271,4 +273,84 @@ test('canceled, test and unknown alert statuses stay visible without presenting 
   assert.match(alerts.textContent, /Canceled/); assert.match(alerts.textContent, /Test/); assert.match(alerts.textContent, /Status unknown/)
   assert.equal(alerts.querySelectorAll('.alert-description[role=alert]').length, 0)
   assert.equal(alerts.querySelectorAll('.alert-item').length, 3)
+})
+
+const field = title => [...document.querySelectorAll('label')].find(item => item.textContent === title).querySelector('input')
+
+test('new facility supports name, coordinate search, pin selection and existing manual fields', async () => {
+  await mount(); await click(button('+ Add facility'))
+  assert(document.querySelector('.leaflet-container'))
+  assert.equal(document.querySelectorAll('.leaflet-marker-icon').length, 0)
+  await change(field('Facility name'), 'Panama Demo Facility')
+  await change(field('Place name or coordinates'), '30.1766, -85.8055')
+  await click(button('Find on map'))
+  assert.equal(field('Latitude').value, '30.1766'); assert.equal(field('Longitude').value, '-85.8055')
+  assert.equal(document.querySelectorAll('.leaflet-marker-icon').length, 1)
+  assert.equal(requests.some(item => String(item.path).startsWith('https:')), false)
+  // Exercise Leaflet's actual click handler; map gestures update the same form fields.
+  await act(async () => { document.querySelector('.leaflet-container').dispatchEvent(new window.MouseEvent('click', { bubbles: true, clientX: 30, clientY: 20 })); await tick() })
+  assert.notEqual(field('Latitude').value, '30.1766')
+  assert(Number.isFinite(Number(field('Latitude').value)))
+  await change(field('Latitude'), '30.1766'); await change(field('Longitude'), '-85.8055')
+  await change(field('Location ID'), '9'); await click(button('Save facility'))
+  const saved = requests.find(item => item.method === 'POST' && item.path === '/api/locations')
+  assert.equal(saved.body.name, 'Panama Demo Facility'); assert.equal(saved.body.latitude, 30.1766)
+  assert.equal(saved.body.longitude, -85.8055); assert.equal(saved.body.id, 9)
+})
+
+test('place search requires a result selection and does not replace the facility name', async () => {
+  await mount(); await click(button('Edit location'))
+  await change(field('Place name or coordinates'), 'Panama City Beach, FL')
+  await click(button('Find on map'))
+  assert.equal(field('Latitude').value, '41.8')
+  assert(document.querySelector('[aria-label="Place search results"]'))
+  await click(document.querySelector('.map-results button'))
+  assert.equal(field('Latitude').value, '30.1766'); assert.equal(field('Longitude').value, '-85.8055')
+  assert.equal(field('Facility name').value, 'Synthetic Test Facility')
+  assert.equal(field('Timezone').value, 'America/Chicago')
+  assert.equal(document.querySelector('.map-results'), null)
+})
+
+test('invalid coordinate searches, no matches and search outages preserve manual editing', async () => {
+  await mount(); await click(button('Edit location'))
+  await change(field('Place name or coordinates'), '91, -85')
+  await click(button('Find on map'))
+  assert.match(document.querySelector('.facility-map-section [role=status]').textContent, /valid latitude/)
+  assert.equal(field('Latitude').value, '41.8')
+  assert.equal(requests.some(item => String(item.path).startsWith('https:')), false)
+  const originalFetch = globalThis.fetch
+  globalThis.fetch = async (path, options) => String(path).startsWith('https:') ? response({}) : originalFetch(path, options)
+  await change(field('Place name or coordinates'), 'Unknown location'); await click(button('Find on map'))
+  assert.match(document.querySelector('.facility-map-section [role=status]').textContent, /No places found/)
+  globalThis.fetch = async (path, options) => { if (String(path).startsWith('https:')) throw new Error('Synthetic search outage'); return originalFetch(path, options) }
+  await click(button('Find on map'))
+  assert.match(document.querySelector('.facility-map-section [role=status]').textContent, /search unavailable/)
+  await change(field('Latitude'), ''); assert.equal(document.querySelectorAll('.leaflet-marker-icon').length, 0)
+  await change(field('Latitude'), '30'); assert.equal(document.querySelectorAll('.leaflet-marker-icon').length, 1)
+})
+
+test('evaluation displays an accessible loader and prevents duplicate requests until completion', async () => {
+  await mount()
+  const originalFetch = globalThis.fetch
+  let complete
+  globalThis.fetch = (path, options) => path === '/api/locations/1/evaluate-week' ? new Promise(resolve => { complete = () => resolve(response(fixture.week)) }) : originalFetch(path, options)
+  await click(button('Check next 7 days ↗'))
+  const loading = document.querySelector('.evaluation-progress[role=status]')
+  assert(loading.querySelector('.spinner'))
+  assert.match(loading.textContent, /Checking the next 7 days/)
+  assert.equal(button('Checking the week…').disabled, true)
+  assert.equal(button('Evaluate today').disabled, true)
+  assert.equal(button('Edit location').disabled, true)
+  await act(async () => { complete(); await tick() })
+  assert.equal(document.querySelector('.evaluation-progress'), null)
+  assert.equal(button('Check next 7 days ↗').disabled, false)
+})
+
+test('operational action is highlighted only in the Risk review panel', async () => {
+  await mount('#decision/14')
+  assert(document.querySelector('.operational-action select'))
+  await click(button('3Message'))
+  assert.equal(document.querySelector('.operational-action'), null)
+  assert.equal(document.querySelector('.review-panel').textContent.includes('Work remotely'), false)
+  assert.equal(document.querySelector('.review-panel').textContent.includes('Approval saves the draft'), false)
 })

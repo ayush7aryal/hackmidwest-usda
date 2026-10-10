@@ -41,7 +41,7 @@ def build_agent(output_model=AgentAdvice) -> Agent:
     if not key or not model_id:
         raise ValueError("Configure OPENAI_API_KEY and MODEL_ID in .env to enable live agent evaluations.")
     # The SDK treats a present-but-empty environment variable as an empty URL.
-    arguments = {"api_key": key, "timeout": 45, "max_retries": 1,
+    arguments = {"api_key": key, "timeout": 45, "max_retries": 0,
                  "base_url": os.environ.get("OPENAI_BASE_URL", "").strip() or "https://api.openai.com/v1"}
     # The workshop service caps chat output at 4,096 tokens and supports JSON schemas.
     model = OpenAIModel(client_args=arguments, model_id=model_id, params={
@@ -58,7 +58,7 @@ def recommend(location: dict, context: dict) -> Recommendation:
     agent = build_agent()
     prompt = json.dumps({"facility": {key: location[key] for key in
         ("name", "latitude", "longitude", "timezone", "open_time", "close_time")},
-        "policy": context})
+        "policy": briefing_context(context)}, separators=(",", ":"))
     advice = AgentAdvice.model_validate_json(invoke(agent, prompt))
     result = Recommendation(**advice.model_dump(), affected_start=context["affected_start"],
                             affected_end=context["affected_end"], evidence=context["evidence"])
@@ -92,15 +92,45 @@ def invoke(agent: Agent, prompt: str) -> str:
         raise ValueError("Model input exceeded the service context limit; source alerts remain available.") from None
 
 
+def briefing_context(context: dict) -> dict:
+    """Compact model input; full evidence and filtering windows remain authoritative."""
+    briefing = {key: context[key] for key in ("posture", "affected_start", "affected_end",
+        "impact_windows", "warnings", "weather_alerts", "confidence_cap", "policy_version")}
+    forecast, air_quality = [], []
+    for entry in context["evidence"]:
+        value = entry["value"]
+        for period in value.get("forecast", []):
+            facts = {key: val for key, val in period.items() if key not in ("startTime", "endTime")}
+            previous = forecast[-1] if forecast else None
+            previous_facts = {key: val for key, val in previous.items() if key not in ("startTime", "endTime")} if previous else None
+            if previous and previous["endTime"] == period["startTime"] and previous_facts == facts:
+                previous["endTime"] = period["endTime"]
+            else:
+                forecast.append(dict(period))
+        if value.get("modeled"):
+            air_quality.append(value)
+    return briefing | {"forecast": forecast, "modeled_air_quality": air_quality}
+
+
 def recommend_week(location: dict, contexts: dict[str, dict]) -> dict[str, Recommendation]:
     """One agent invocation for all covered dates; never send employee identities."""
     agent = build_agent(WeeklyAdvice)
-    policies = [{"date": day, "policy": context} for day, context in contexts.items()]
+    policies = [{"date": day, "policy": briefing_context(context)} for day, context in contexts.items()]
+    # Alert text is shared across dates; only its timing assessment changes per day.
+    alerts = {}
+    for item in policies:
+        for alert in item["policy"]["weather_alerts"]:
+            alerts[alert["url"]] = {key: value for key, value in alert.items() if key != "demo_policy_assessment"}
+        item["policy"]["weather_alerts"] = [{"url": alert["url"], "demo_policy_assessment": alert["demo_policy_assessment"]}
+                                           for alert in item["policy"]["weather_alerts"]]
     prompt = json.dumps({"facility": {key: location[key] for key in
         ("name", "latitude", "longitude", "timezone", "open_time", "close_time")},
-        "days": policies, "instruction": "Return exactly one item per supplied date. Each day is independent. "
-        "Use at most two short sentences per day's reason. Discuss only hazards overlapping that day's office hours; "
-        "do not apply a Wednesday hazard to Monday. Do not invent data for uncovered days."})
+        "weather_alerts": list(alerts.values()), "days": policies,
+        "instruction": "Return exactly one item per supplied date. Each day is independent. "
+        "Look up each day's weather_alerts by URL in the shared weather_alerts list. "
+        "Use at most 45 words per day's reason, one short uncertainty sentence and one concise what_would_change item. "
+        "Discuss only hazards overlapping that day's office hours; do not apply a Wednesday hazard to Monday. "
+        "Do not invent data for uncovered days."}, separators=(",", ":"))
     answer = WeeklyAdvice.model_validate_json(invoke(agent, prompt))
     days = {item.date.isoformat(): item for item in answer.days}
     if len(days) != len(answer.days) or set(days) != set(contexts):

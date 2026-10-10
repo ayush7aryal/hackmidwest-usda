@@ -2,9 +2,42 @@
 
 Completed locally before packaging for Akamai:
 
-- `cd backend && uv run --locked pytest -q`: **201 passed**.
+- Latest update: approved bodies/exports omit draft and reviewer labels, including
+  legacy saved approvals, while original drafts and review history remain intact.
+  Essential instructions and manager edits are preserved. Risk contains the
+  emphasized operational action; Message focuses on wording and audience.
+- Add/edit facility includes a Leaflet map with click/drag pin selection, explicit
+  US city/ZIP search (Open-Meteo/GeoNames), local coordinate search, separate
+  facility name and the existing ID/coordinate/timezone/hour fields. DOM tests
+  exercise actual Leaflet click handlers, place-result selection, invalid
+  coordinates, empty results and search outages. No map key or third agent tool.
+- Concurrent source reads and compact model input retain all canonical evidence,
+  per-date alert assessments and exact selection windows. A barrier test proves
+  the requests overlap and each evaluation refetches sources. The agent keeps
+  one invocation for seven dates and two hazard tools. Hidden model HTTP retries
+  are disabled so a failed attempt returns for an explicit manager retry.
+- One live seven-day advisory check on the configured facility and Akamai model
+  validated all seven dates in **31.55 seconds** (sources **1.06 seconds**, model
+  **30.49 seconds**). Input size fell from 34,047 to 14,887 characters for that
+  snapshot. This read-only timing check made no database writes or sends. The
+  earlier 50.7-second check below used an older snapshot; these are individual
+  observations, not a controlled benchmark or latency guarantee.
+- Evaluation has an accessible spinner, elapsed time, slow-response text and
+  duplicate-request protection; DOM tests verify loading and completion states.
+  Browser visual/map-tile interaction is not verified: no browser is available
+  to the automation connector. Production build and served assets are checked.
+- Rebuilt and recreated both Docker services with the existing SQLite volume.
+  Authenticated API checks retained 20 recent decisions and verified one existing
+  approved message is returned clean. All four tables, integrity and foreign-key
+  checks passed. Nginx serves `/assets/index-fOMqrRXE.js` and
+  `/assets/index-BkYgZ6ef.css`, including map styles and loader. Its referrer policy
+  permits attributed OSM tile requests. Live Panama City Beach place search
+  returned valid coordinates and timezone. No facility/staff/approval was changed
+  during these final checks.
+
+- `cd backend && uv run --locked pytest -q`: **208 passed**.
 - `cd frontend && npm ci && npm run build`: production build passed.
-- `cd frontend && npm test`: **14 DOM interaction tests passed** for the compact
+- `cd frontend && npm test`: **19 DOM interaction tests passed** for the compact
   week selector and Risk → Recipients → Message flow. Tests cover one date shown
   at a time, mixed shift actions, expandable source notes/advisories, visible
   urgent instructions, visible test/canceled/unknown statuses, dated shift hours,
@@ -14,7 +47,7 @@ Completed locally before packaging for Akamai:
   Reading steps does not mark unchanged drafts dirty; failed refreshes preserve
   the previous plan/alerts with explicit warnings. These use synthetic HTTP
   responses and a DOM environment, not a browser or live model.
-- UX update moves policy/evidence, daily details, history and decision records
+- The prior compact-layout update moves policy/evidence, daily details, history and decision records
   behind disclosures. One selected date and one review step are shown at a time.
   No backend schema, policy, tool, recipient or approval rules changed.
 - Live NWS + Open-Meteo + OpenAI/Strands evaluation through Nginx saved a

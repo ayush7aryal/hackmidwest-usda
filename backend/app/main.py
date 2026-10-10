@@ -242,6 +242,9 @@ def decision(decision_id: RouteID, db: DB, manager: ManagerSession) -> dict:
     if row is None:
         raise HTTPException(404, "Decision not found")
     result = dict(row)
+    if result["manager_status"] == "APPROVED":
+        # Existing approvals also export clean employee text; audit snapshots stay intact.
+        result["draft_body"] = review.labeled_message(result["draft_body"], "APPROVED", result["reviewed_by"])
     for stored, exposed in (("evidence_json", "evidence"), ("threshold_json", "thresholds"),
                             ("alternatives_json", "alternatives"), ("recipients_json", "recipients"),
                             ("delivery_json", "delivery")):

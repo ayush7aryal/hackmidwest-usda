@@ -79,9 +79,12 @@ def validate_approval(row: dict, location: dict, alternatives: dict, recipients:
 
 
 def labeled_message(body: str, status: str, manager_id: int) -> str:
-    """Keep editable/exported text visibly distinct from an unapproved recommendation."""
+    """Keep review metadata out of approved employee messages and exports."""
     lines = body.splitlines()
     if lines and lines[0].startswith(("DRAFT —", "APPROVED —", "REJECTED —")):
         body = "\n".join(lines[1:]).lstrip()
+    if status == "APPROVED":
+        # Also clean messages generated before draft status was separated from rationale.
+        return body.replace(" This is a draft; your manager decides the final action.", "")
     label = "DRAFT — pending manager approval; this is not a finalized instruction." if status == "PENDING" else f"{status} — reviewed by manager {manager_id}."
     return f"{label}\n\n{body}"

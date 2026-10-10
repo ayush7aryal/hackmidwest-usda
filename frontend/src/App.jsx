@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react'
 import { api } from './api.js'
+import FacilityMap from './FacilityMap.jsx'
 
 const POSTURES = ['NORMAL', 'DELAYED_OPENING', 'EARLY_DISMISSAL', 'TELEWORK', 'CLOSED']
 const LABELS = { NORMAL: 'Normal operations', DELAYED_OPENING: 'Delayed opening', EARLY_DISMISSAL: 'Early dismissal', TELEWORK: 'Work remotely', CLOSED: 'Closed', PENDING: 'Needs review', APPROVED: 'Approved', REJECTED: 'Rejected' }
@@ -119,12 +120,28 @@ function FacilityForm({ facility, onSaved, onCancel }) {
   }
   return <section className="card"><div className="section-head"><div><p className="eyebrow">LOCATION SETTINGS</p><h1>{facility ? 'Edit facility' : 'Add facility'}</h1></div><button onClick={onCancel} disabled={busy}>Cancel</button></div>
     <p className="muted">{facility ? 'Save your changes, then check the forecast again.' : 'Your existing demo employee sheet moves to this facility.'}</p>
-    <form onSubmit={submit}><div className="form-grid">{fields.map(([key, title, type]) => <label key={key}>{title}<input type={type} value={values[key]} required={key !== 'id'}
+    <form onSubmit={submit}><label className="facility-name">Facility name<input required maxLength="200" value={values.name} placeholder="e.g. Panama City Office" onChange={event => setValues({ ...values, name: event.target.value })} /></label>
+      <FacilityMap latitude={values.latitude} longitude={values.longitude} onPick={point => setValues(previous => ({ ...previous, ...point }))} />
+      <h2>Facility details</h2><div className="form-grid">{fields.filter(([key]) => key !== 'name').map(([key, title, type]) => <label key={key}>{title}<input type={type} value={values[key]} required={key !== 'id'}
       min={key === 'id' ? 1 : key === 'latitude' ? -90 : key === 'longitude' ? -180 : undefined} max={key === 'latitude' ? 90 : key === 'longitude' ? 180 : undefined}
       step={['latitude', 'longitude'].includes(key) ? 'any' : undefined} placeholder={key === 'id' ? 'Automatic if blank' : key === 'timezone' ? 'America/Chicago' : undefined}
       onChange={event => setValues({ ...values, [key]: event.target.value })} /></label>)}</div>
       <ErrorMessage>{error}</ErrorMessage><button className="primary" disabled={busy}>{busy ? 'Saving…' : 'Save facility'}</button></form>
   </section>
+}
+
+function EvaluationLoader({ weekly }) {
+  const [seconds, setSeconds] = useState(0)
+  useEffect(() => {
+    const timer = setInterval(() => setSeconds(value => value + 1), 1000)
+    return () => clearInterval(timer)
+  }, [])
+  return <div className="evaluation-progress" role="status" aria-live="polite">
+    <span className="spinner" aria-hidden="true" /><div><strong>{weekly ? 'Checking the next 7 days' : 'Evaluating today'}</strong>
+      <p className="help">Fetching live sources and preparing AI advice for affected shifts.</p>
+      <span className="help">{seconds < 30 ? 'Please keep this page open.' : 'The source or model service is taking longer. Your saved plan is still available.'}</span></div>
+    <span className="elapsed" aria-hidden="true">{seconds}s</span>
+  </div>
 }
 
 function Dashboard() {
@@ -194,7 +211,7 @@ function Dashboard() {
         <p className="help">Location {facility.id} · {facility.latitude}, {facility.longitude}</p>
         {facility.affected_start && <p className="help">{when(facility.affected_start, facility.timezone)} – {when(facility.affected_end, facility.timezone)}</p>}
         {latest && <a href={`#decision/${latest.id}`}>Review daily recommendation →</a>}</details>
-      {busy && <p className="evaluation-progress" role="status">Checking live weather and air quality, then matching shifts. This may take about a minute.</p>}
+      {busy && <EvaluationLoader weekly={busy === 'week'} />}
     </section>
     {alertSnapshot ? <WeatherAlerts alerts={alertSnapshot.alerts} current available={alertSnapshot.available} fetchedAt={alertSnapshot.fetched_at} error={alertSnapshot.error}
       sourceUrl={alertSnapshot.source_url} timezone={facility.timezone} onRefresh={() => setAlertsRefresh(value => value + 1)} refreshing={alertsBusy} /> : <p className="help" role="status">Checking current NWS alerts…</p>}
@@ -277,7 +294,7 @@ function DecisionEvidence({ detail, timezone }) {
 function RiskStep({ detail, form, busy, onEdit, onPosture, timezone }) {
   return <><p className="eyebrow">STEP 1 OF 3</p><h2>Review the risk</h2><ReasonText text={form.reason} /><SourceNotes warnings={detail.alternatives.warnings} />
     <WeatherAlerts alerts={detail.alternatives.inputs?.weather?.alerts} timezone={timezone} />
-    <label>Your operational action<select disabled={busy} value={form.posture} onChange={event => onPosture(event.target.value)}>{POSTURES.map(value => <option key={value} value={value}>{label(value)}</option>)}</select></label>
+    <div className="operational-action"><label>Your operational action<select disabled={busy} value={form.posture} onChange={event => onPosture(event.target.value)}>{POSTURES.map(value => <option key={value} value={value}>{label(value)}</option>)}</select></label><p className="help">Choose the action for this affected window. Employee selection follows your choice.</p></div>
     <details className="disclosure"><summary>Edit the rationale</summary><label>Reason<textarea disabled={busy} rows="3" minLength="20" maxLength="3000" value={form.reason} onChange={event => onEdit('reason', event.target.value)} /></label></details>
     <DecisionEvidence detail={detail} timezone={timezone} />
   </>
@@ -287,14 +304,14 @@ function MessageStep({ detail, form, rows, busy, dirty, ready, essential, onEsse
   const selected = rows.filter(row => row.included)
   const needsEssential = selected.some(row => row.requires_manager_review)
   return <><p className="eyebrow">STEP 3 OF 3</p><div className="section-head"><h2>Prepare your message</h2><Badge>{selected.length} recipient{selected.length === 1 ? '' : 's'}</Badge></div>
-    <p className="help">{label(form.posture)} · Approval saves the draft. Email delivery is off.</p>
+    <p className="help">Review the wording and recipients. Email delivery is off.</p>
     {form.posture !== detail.posture && <p className="essential-note">Your action changed. Update the message wording to match.</p>}
     {!selected.length && <p className="essential-note">No recipients selected. This message will be saved without an audience.</p>}
     <form onSubmit={event => { event.preventDefault(); onSave(event.nativeEvent.submitter?.value || 'PENDING') }}><fieldset disabled={busy || !ready}>
       <label>Subject<input maxLength="240" required value={form.draft_subject} onChange={event => onEdit('draft_subject', event.target.value)} /></label>
       <label>Message<textarea className="message-input" rows="9" maxLength="20000" required value={form.draft_body} onChange={event => onEdit('draft_body', event.target.value)} /></label>
       {needsEssential && <label className="check-notice"><input type="checkbox" checked={essential} onChange={event => onEssential(event.target.checked)} />I have confirmed instructions for the selected essential staff.</label>}
-      <div className="message-actions"><button className="primary" type="submit" value="APPROVED" disabled={needsEssential && !essential}>Approve draft</button><button type="submit" value="PENDING">Save draft</button>
+      <div className="message-actions"><button className="primary" type="submit" value="APPROVED" disabled={needsEssential && !essential}>Approve message</button><button type="submit" value="PENDING">Save draft</button>
         <button type="button" disabled={dirty} onClick={onDownload}>Download saved message ↓</button><button className="text-button danger" type="submit" value="REJECTED">Reject</button></div>
     </fieldset></form><p className="help" role="status">{dirty ? 'Unsaved changes · save before downloading.' : `Saved · ${label(detail.manager_status)}`}</p>
   </>
@@ -355,7 +372,7 @@ function DecisionDetails({ id, onDirtyChange, onNavigate }) {
     setBusy(true); setError(''); setNotice('')
     try {
       const result = await api(`/decisions/${id}/review`, { method: 'POST', body: { ...form, ...selection, status, essential_confirmed: essential } })
-      apply(result); setNotice(status === 'PENDING' ? 'Draft saved.' : status === 'APPROVED' ? 'Draft approved. Ready to download.' : 'Draft rejected.')
+      apply(result); setNotice(status === 'PENDING' ? 'Draft saved.' : status === 'APPROVED' ? 'Message ready to download.' : 'Draft rejected.')
     } catch (error) { setError(error.message) } finally { setBusy(false) }
   }
   function download() {
