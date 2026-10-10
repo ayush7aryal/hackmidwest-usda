@@ -1,0 +1,13 @@
+services:
+  api:
+    environment:
+      DEMO_LOGIN: "false"
+      MANAGER_PASSWORD: ${MANAGER_PASSWORD:?Set a manager password in .env}
+      SESSION_SECRET: ${SESSION_SECRET:?Set a session secret in .env}
+  web:
+    # Base HTTP mapping becomes port 80 when WEB_PORT=80 and WEB_BIND=0.0.0.0.
+    ports:
+      - "0.0.0.0:443:443"
+    volumes:
+      - ./frontend/nginx.https.conf:/etc/nginx/conf.d/default.conf:ro
+      - /etc/letsencrypt:/etc/letsencrypt:ro

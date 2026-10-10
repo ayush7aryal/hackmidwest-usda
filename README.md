@@ -1,0 +1,280 @@
+# Facility Operations AI
+
+A hackathon MVP for manager-reviewed US office disruption advice: FastAPI,
+SQLite, one Strands agent, two live data tools, React/Vite, and two Docker
+containers. Built from [the blueprint](docs/HACKATHON_IMPLEMENTATION.md).
+**Email delivery is intentionally excluded.** Managers prepare, review and
+download messages; nothing is automatically sent.
+
+## Run the complete application locally
+
+Requires Docker Desktop/Engine with Compose:
+
+```sh
+cp .env.example .env
+# Edit .env: configure OPENAI_API_KEY, MODEL_ID and NWS_USER_AGENT.
+docker compose build
+docker compose run --rm api python seed.py
+docker compose up -d
+```
+
+Open **http://localhost:8080**. Sign in as manager **1001** (Chicago) or **2001**
+(Denver). Leave the password blank only in local demo mode with an empty
+`MANAGER_PASSWORD`; a configured password is always required. Nginx proxies the API;
+there is no published backend port.
+
+Set `MODEL_ID` to a chat/tool-capable model available to your account and provide
+`OPENAI_API_KEY`. `OPENAI_BASE_URL` optionally selects a provisioned compatible
+endpoint, including Akamai inference if supported. Missing credentials or invalid
+source/model output produce `INSUFFICIENT_DATA`, preserving the last known
+recommendation. There is no fake-live or silent deterministic fallback.
+
+The example configuration uses the [Akamai workshop inference service](https://github.com/akamai-developers/akamai-workshop-hackmidwest/blob/e362ae25ea54a5ee33fa11f6265d15bc1705dca3/docs/inference.md):
+`MODEL_ID=hackathon-chat`, `OPENAI_BASE_URL=https://ws.akamai-workshops.com/v1`, and
+your team key in `OPENAI_API_KEY`. The agent requests JSON schema output with a
+4,096-token limit. For direct OpenAI, clear the base URL and choose its model.
+
+After editing `.env`, run `docker compose up -d --force-recreate api` so the
+backend loads the new settings. A container restart alone retains its old environment.
+
+## Akamai deployment
+
+Follow [the Akamai deployment runbook](docs/AKAMAI_DEPLOYMENT.md): Ubuntu, Docker,
+source transfer, model/password configuration, DNS/TLS, Compose, backups and
+verification. Application processing and SQLite stay on the Compute Instance.
+The override forces password login and adds HTTPS to Nginx with host-provided
+certificates, retaining exactly two services. A source-only deployment archive is
+available at `artifacts/facility-operations-akamai.tar.gz`; it excludes keys and
+local data. No instance has been provisioned.
+
+## Demo workflow
+
+1. Sign in; edit **location ID, name, latitude, longitude**, timezone or hours.
+2. Review **Current NWS alerts** and their instructions; this feed refreshes every
+   minute while the dashboard is open. Click **Check next 7 days** for dated, shift-specific planning
+   using NWS forecast/alerts and modeled AQI. **Evaluate today** retains the
+   single-day status check.
+3. Inspect each date and open each affected shift draft; review evidence,
+   timestamps, policy thresholds, uncertainty and advice.
+4. Review every employee's schedule, essential/remote flags and selection reason.
+5. Choose affected on-site or explicit facility-wide scope; adjust eligible staff.
+6. Edit posture, rationale, subject and message. Confirm essential-staff instructions.
+7. Save, approve or reject; download the labeled saved message. Reopen history.
+
+Creating a facility reuses the manager's current synthetic employee sheet: the
+manager and existing staff move to the new facility with the same employee IDs,
+names, emails, shifts and essential/remote flags. No duplicate staff are created;
+the other manager's roster remains at their facility. Past decisions stay with
+their original facility and retain their frozen employee snapshots. A fresh
+evaluation filters this same roster using the new facility's timezone, operating
+hours, status and affected window. ID edits atomically move related users/decisions. Configuration
+changes require a fresh evaluation before approving old advice. Office/shift
+hours are same-day; impact windows can cross midnight. Matching uses actual local
+dates and IANA timezone/DST offsets.
+
+## Scope and policy
+
+- Exactly four tables: `locations`, `users`, `shifts`, `decisions`, plus the two
+  specified explicit indexes. Schema is in `backend/schema.sql`.
+- Seed: two offices, two managers, twelve staff, three weekly templates and mixed
+  essential/remote flags. All seeded employee emails use `@example.com`.
+- Two read-only `@tool` functions: `get_nws_weather` and `get_air_quality`. Requests
+  have timeouts/backoff; NWS discovery URLs stay on its official API host.
+  Open-Meteo/CAMS AQI is labeled modeled, not a verified sensor reading.
+- One Strands adviser receives compact evidence and versioned demo policy. It
+  generates posture, explanation, confidence, uncertainty and change conditions.
+  The backend attaches original evidence and exact impact times, validates posture
+  consistency and caps confidence. The model does not retype source JSON or
+  timestamps, avoiding formatting/precision failures and unnecessary output.
+  Malformed advice or unsupported posture still prevents saving a decision.
+  The provider client allows one retry; the extra Strands retry loop is disabled
+  so throttling cannot silently trigger six more model attempts. Authentication,
+  quota, connectivity, timeout and output-limit failures have specific messages.
+- `thresholds.py` labels all actions **app-defined demo policy**, anchored to
+  [NWS documentation](https://www.weather.gov/documentation/services-web-api) and
+  [AirNow AQI guidance](https://www.airnow.gov/aqi/aqi-basics/). AQI >=151 suggests
+  telework; >=301 suggests closure. Qualifying severe alerts yield delayed opening,
+  early dismissal or telework based on timing; immediate extreme alerts suggest
+  closure. No trigger with weather coverage yields NORMAL. These actions are not
+  government office-closure rules. Version 3 also suggests telework for actual
+  forecast periods with sustained wind >=40 mph; this is an app-defined demo
+  threshold. Forecast thunderstorms always add a dated manager-review warning
+  and do not by themselves mandate an automatic schedule change.
+- `demo-office-v3` retains every NWS alert in agent evidence and records why each
+  does or does not trigger a schedule change. Overlapping advisories below the
+  automatic trigger require manager review and cap confidence at 0.5. The
+  dashboard and decision view show alert details, timing and NWS instructions.
+  **NORMAL OPERATIONS means no automatic office schedule change, not hazard-free
+  weather.** For example, a Rip Current Statement or High Surf Advisory remains
+  visible without automatically closing an indoor office. Managers can edit the
+  posture and choose facility-wide messages when local impacts require it.
+- Every event returned by the NWS point alert feed is shown, without filtering
+  by event name, severity, urgency, certainty or office hours. Unknown/new types,
+  updates and test/canceled statuses remain visible with their source fields.
+  The manager sees full alert descriptions/instructions directly from NWS,
+  independently of model availability. Alert fetching survives forecast failure;
+  a failed alert fetch is explicitly unavailable, never an empty all-clear.
+  The dashboard retains previous alerts as potentially outdated during outages.
+  New, revised and removed alerts flag review even if posture remains NORMAL.
+  The agent only recommends; the manager chooses the action and message audience,
+  edits text, and approves or rejects. No action or email is dispatched.
+- Each decision retains original inputs, advice, recipients, draft and subsequent
+  reviews in JSON. No extra audit or notification tables.
+- APScheduler checks hourly with `max_instances=1`, `coalesce=True`, one process
+  lock and one Uvicorn worker. Startup checks are opt-in. Material changes create
+  in-app review flags only; no manager or employee email delivery exists.
+
+## API
+
+`POST /api/login` accepts `emp_id` and optional local `password`; use the returned
+bearer token. Facility/decision routes check current manager role and assignment;
+foreign/missing resources return 404. Tokens expire after eight hours. Public
+mode requires a configured password and stable session secret.
+
+| Method | Route | Purpose |
+| --- | --- | --- |
+| GET | `/api/health` | Database connectivity |
+| GET | `/api/locations/{id}/weather-alerts` | All current NWS alerts; independent of model/forecast |
+| POST | `/api/login` | Manager session |
+| GET / POST | `/api/locations` | Assigned facility / create and reuse current demo employee sheet |
+| GET / PATCH | `/api/locations/{id}` | Status / edit ID and configuration |
+| GET | `/api/locations/{id}/employees` | Staff and weekly schedules |
+| POST | `/api/locations/{id}/evaluate` | Live sources + agent + snapshot |
+| POST | `/api/locations/{id}/evaluate-week` | Seven local dates; one adviser call; separate affected shift drafts |
+| GET | `/api/locations/{id}/week-plan` | Restore weekly overview and current draft recipients/review states |
+| GET | `/api/locations/{id}/decisions` | History (`limit` 1–100, `offset` >=0) |
+| GET | `/api/decisions/{id}` | Evidence/draft/review record |
+| POST | `/api/decisions/{id}/recipients` | Fresh selection preview |
+| POST | `/api/decisions/{id}/review` | Save/approve/reject with edited text |
+
+There is no `/send` route or SMTP adapter. Unknown fields, including arbitrary
+mail recipients, are rejected. Messages can be downloaded through React.
+
+## How Wednesday employees are selected
+
+The model explains risk; it does not query employees or invent impact times.
+`thresholds.py` calculates affected windows from API alert/forecast timestamps and
+versioned policy. `agent.recommend_week()` explains the covered dates in one
+Strands invocation; canonical windows and evidence are attached by the backend.
+No employee identities or emails are sent to the model.
+
+`recipients.load_roster()` executes this parameterized SQLite query:
+
+```sql
+SELECT u.*, s.name AS shift_name, s.weekly_hours_json
+FROM users u
+LEFT JOIN shifts s ON s.id = u.shift_id
+WHERE u.location_id = ?
+  AND u.shift_id = ?  -- appended only for a shift-specific draft
+ORDER BY u.emp_id;
+```
+
+The facility query binds `(location_id,)`; a shift-specific query adds the
+fixed SQL clause `AND u.shift_id = ?` and binds `(location_id, shift_id)`.
+The existing `idx_users_location` index restricts the roster before the join.
+Python then converts the risk window to the facility timezone, picks the actual
+weekday (`wed` on Wednesday), and reads that day's hours from the shift's JSON.
+It includes an employee only if the following interval has positive length:
+
+```python
+max(risk_start, shift_start, office_open) < min(risk_end, shift_end, office_close)
+```
+
+Default affected scope also excludes managers, already-remote staff, employees
+without a valid scheduled shift, and NORMAL advice. Essential personnel remain
+visible and require explicit manager confirmation. All include/exclude reasons
+are saved with the decision. SQL chooses the roster; Python performs the dated,
+timezone/DST-aware interval and eligibility checks. The LLM never writes SQL.
+
+Complex model JSON is parsed and validated with `AgentAdvice` / `WeeklyAdvice`.
+Dates must match the supplied covered dates, posture must match policy, and
+canonical evidence/times are attached by the backend. SQL never compares the
+entire JSON, searches the explanation for weekdays, or executes model-generated
+SQL. Filtering uses only facility/shift IDs, validated posture and exact instants.
+A malformed response or conflicting posture prevents saving decisions.
+
+The weekly path loads the roster once and decodes each distinct shift once per
+check, then reuses that data for all dates, shift drafts and saved recipient
+counts. Each filter computes overlap once per distinct shift, rather than once
+per employee. There is no global roster cache: manager previews/approvals reload
+current staff in one indexed query. Separate selection windows are persisted in
+existing decision JSON and reused by daily drafts and review, so a broad day
+summary cannot accidentally select employees working only between hazards.
+Overlapping/duplicate windows are merged; safe gaps remain separate. Existing
+historical decisions without window metadata retain their stored impact bounds.
+
+For example, a Wednesday 16:00–18:00 risk excludes an 08:00–16:00 shift and
+includes an on-site 10:00–18:00 shift. A risk spanning both shifts creates two
+independent subject/body templates and recipient lists. `weekly.py` splits
+separate or mixed risk windows before grouping, so someone working only during
+a safe gap is not selected. A person overlapping two separate windows can appear
+in both drafts; these are separate messages, not duplicate sends.
+
+**Check next 7 days** evaluates the current/next operating date plus six dates,
+not necessarily Monday through Sunday. It fetches each of the two sources once.
+[NWS hourly forecasts](https://www.weather.gov/documentation/services-web-api)
+can cover seven days, while its active-alert feed contains currently issued
+alerts, including any future effective periods. It cannot guarantee that all
+future storm warnings have already been issued.
+[Open-Meteo air-quality forecasts](https://open-meteo.com/en/docs/air-quality-api)
+are requested for seven days; actual modeled coverage can be shorter. Missing
+weather coverage is explicitly INSUFFICIENT DATA unless known source hazards
+support a recommendation; missing AQI is a warning, never a fabricated reading.
+A covered date without affected staff has a day assessment with zero default
+recipients, allowing manager review or an explicit wider notice. Future drafts
+do not overwrite today's facility status. Each shift/window has its own editable
+text, recipient review and approval. The weekly overview survives navigation and
+restart using JSON in the existing `decisions` table. No extra tables or email
+transport are added.
+
+## Develop and test with uv
+
+Python 3.12+ and `uv`; local React development requires Node 22.12+:
+
+```sh
+cd backend
+uv sync --locked
+uv run --env-file ../.env python seed.py
+uv run --env-file ../.env uvicorn app.main:app --host 127.0.0.1 --port 8000
+```
+
+In a second terminal:
+
+```sh
+cd frontend
+npm ci
+npm run dev
+```
+
+Open the Vite URL. Its `/api` proxy targets localhost:8000. Direct API docs are
+at http://localhost:8000/docs in this mode. SQLite defaults to
+`backend/data/facility.db`; Docker uses `/data/facility.db` on a named volume.
+
+```sh
+cd backend
+uv run --locked pytest -q
+```
+
+Tests cover schema/seeds/constraints, auth/ownership, atomic ID edits, source
+failures/retries, all five postures, invalid model advice, date/DST shift filtering,
+essential review, fresh selections, approval/history, persistence and scheduling.
+Fixtures are explicitly synthetic; live evaluation never uses them.
+
+Runtime dependencies: FastAPI/Uvicorn, `httpx` for the two data sources,
+`strands-agents[openai]` for the adviser, APScheduler for the required hourly job.
+Pytest is development-only. React, ReactDOM and Vite are the only direct frontend
+packages. Both dependency lockfiles are included.
+
+## Operations
+
+```sh
+docker compose ps
+docker compose logs --tail=100 api web
+docker compose restart api
+docker compose down
+```
+
+The named volume survives restart and `down`. Avoid `down -v` when retaining
+history. Never scale the API or run multiple workers with the embedded scheduler.
+A concurrent evaluation/edit returns 409 and can be retried. Use password mode
+and HTTPS before public exposure, as detailed in the Akamai runbook.
