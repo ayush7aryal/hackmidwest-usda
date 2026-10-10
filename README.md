@@ -144,8 +144,8 @@ dates and IANA timezone/DST offsets.
   edits text, and approves or rejects. No action or email is dispatched.
 - Each decision retains original inputs, advice, recipients, draft and subsequent
   reviews in JSON. No extra audit or notification tables.
-- APScheduler checks hourly with `max_instances=1`, `coalesce=True`, one process
-  lock and one Uvicorn worker. Startup checks are opt-in. Material changes create
+- APScheduler checks every three hours (`EVALUATION_INTERVAL_HOURS=3`) with
+  `max_instances=1`, `coalesce=True`, one process lock and one Uvicorn worker. Startup checks are opt-in. Material changes create
   in-app review flags only; no manager or employee email delivery exists.
 
 ## API
@@ -299,7 +299,7 @@ essential review, fresh selections, approval/history, persistence and scheduling
 Fixtures are explicitly synthetic; live evaluation never uses them.
 
 Runtime dependencies: FastAPI/Uvicorn, `httpx` for the two data sources,
-`strands-agents[openai]` for the adviser, APScheduler for the required hourly job.
+`strands-agents[openai]` for the adviser, APScheduler for the in-process three-hour job.
 Pytest is development-only. React and ReactDOM are the only browser runtime
 packages. Vite builds the app; jsdom and esbuild also support frontend tests.
 Both dependency lockfiles are included.

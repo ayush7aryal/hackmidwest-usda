@@ -89,6 +89,7 @@ MODEL_ID=hackathon-chat
 OPENAI_BASE_URL=https://ws.akamai-workshops.com/v1
 NWS_USER_AGENT=FacilityOperationsAI/0.1 (your-real-contact-address)
 SCHEDULER_ENABLED=true
+EVALUATION_INTERVAL_HOURS=3
 EVALUATE_ON_STARTUP=false
 WEB_BIND=0.0.0.0
 WEB_PORT=80
@@ -180,7 +181,18 @@ sudo docker compose logs --tail=100 api web
 `INSUFFICIENT_DATA` preserves the last known recommendation. Check model access,
 key/base URL, US coordinates, source connectivity and NWS user agent. A 409 means
 the single-worker operation lock is busy; retry after the running evaluation/edit.
-The first scheduled check runs after an hour unless startup evaluation is enabled.
+The scheduler reloads all saved facilities every three hours and updates each
+facility's current posture, reason, confidence, affected window and last-checked
+time, saving a pending decision snapshot in the same SQLite database. Newly
+added facilities are included automatically on the next run. Source/model
+failures preserve the last known recommendation. The seven-day plan is refreshed
+with the manager's **Check next 7 days** button; scheduled checks update daily status.
+
+The first scheduled check runs three hours after the backend starts unless
+`EVALUATE_ON_STARTUP=true`. This is an interval from process startup, not fixed
+UTC clock times. Restarting resets the interval; keep the instance and containers
+running. Set `EVALUATION_INTERVAL_HOURS` to another positive whole number if
+needed. No host cron task or extra service is required.
 
 ## Persistence, backup and updates
 

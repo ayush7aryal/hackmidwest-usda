@@ -1,4 +1,4 @@
-"""One in-process hourly scheduler; run exactly one Uvicorn worker."""
+"""One in-process scheduler; run exactly one Uvicorn worker."""
 
 import logging
 import os
@@ -13,7 +13,7 @@ logger = logging.getLogger(__name__)
 
 
 def evaluate_all(path: str) -> None:
-    """Reload facility IDs each hour; failures never prevent the next office's check."""
+    """Reload facilities every run; failures never prevent the next office's check."""
     db = connect(path)
     try:
         location_ids = [row[0] for row in db.execute("SELECT id FROM locations ORDER BY id")]
@@ -34,9 +34,15 @@ def start_scheduler(path: str) -> BackgroundScheduler | None:
     """No surprise startup evaluation unless explicitly enabled in configuration."""
     if os.environ.get("SCHEDULER_ENABLED", "false").lower() != "true":
         return None
+    try:
+        hours = int(os.environ.get("EVALUATION_INTERVAL_HOURS", "3"))
+        if hours < 1:
+            raise ValueError
+    except ValueError:
+        raise ValueError("EVALUATION_INTERVAL_HOURS must be a positive whole number.") from None
     scheduler = BackgroundScheduler(timezone="UTC")
     options = {"next_run_time": datetime.now(UTC)} if os.environ.get("EVALUATE_ON_STARTUP", "false").lower() == "true" else {}
-    scheduler.add_job(evaluate_all, "interval", hours=1, args=[path], id="hourly-facility-evaluation",
+    scheduler.add_job(evaluate_all, "interval", hours=hours, args=[path], id="facility-evaluation",
                       max_instances=1, coalesce=True, **options)
     scheduler.start()
     return scheduler

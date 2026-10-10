@@ -2,6 +2,14 @@
 
 Completed locally before packaging for Akamai:
 
+- Scheduled refresh now defaults to **three hours** via
+  `EVALUATION_INTERVAL_HOURS=3`. Tests verify 10,800-second intervals, rejection
+  of invalid settings, no overlapping runs and no default startup check. An
+  integration test adds a facility through the API, runs the scheduler with
+  synthetic hazard/model responses and verifies its current status, timestamp
+  and pending decision are persisted without email delivery. Facility IDs are
+  reloaded on every run; seven-day plans remain manager-triggered.
+
 - Latest update: approved bodies/exports omit draft and reviewer labels, including
   legacy saved approvals, while original drafts and review history remain intact.
   Essential instructions and manager edits are preserved. Risk contains the
@@ -35,7 +43,7 @@ Completed locally before packaging for Akamai:
   returned valid coordinates and timezone. No facility/staff/approval was changed
   during these final checks.
 
-- `cd backend && uv run --locked pytest -q`: **208 passed**.
+- `cd backend && uv run --locked pytest -q`: **213 passed**.
 - `cd frontend && npm ci && npm run build`: production build passed.
 - `cd frontend && npm test`: **19 DOM interaction tests passed** for the compact
   week selector and Risk → Recipients → Message flow. Tests cover one date shown
