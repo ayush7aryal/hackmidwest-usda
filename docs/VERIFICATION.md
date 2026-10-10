@@ -1,5 +1,38 @@
 # MVP verification — October 10, 2026
 
+Akamai deployment verified on October 10, 2026:
+
+- Live app: **https://172.236.119.150**. Instance `107866813` is running in Chicago
+  (`us-ord`) on Ubuntu 24.04 with the approved 2 GB / 1 vCPU / 50 GB plan.
+  Firewall `201494741` exposes 80/443 and limits SSH to the deployment IP.
+  The backend has no published port; exactly `api` and `web` remain running.
+- Source archive and database checksums matched after secure transfer. The
+  existing database was imported without seeding: 7 facilities, 26 users,
+  3 shifts and 91 decisions. Four-table, integrity and foreign-key checks passed.
+- The deployed scheduler's actual batch function evaluated all 7 facilities
+  against live NWS alerts/forecasts, modeled Open-Meteo AQI and the configured
+  Akamai `hackathon-chat` Strands adviser. All facilities updated successfully
+  in 95.48 seconds; decisions #92–98 were saved PENDING, bringing the total to
+  98. Both source tools were available for all seven evaluations. No delivery
+  timestamps were set, and no messages were sent.
+- Runtime configuration enables the 10,800-second interval with one worker,
+  `max_instances=1`, `coalesce=True`, and no startup evaluation. Newly added
+  facilities are selected on the next batch. The manual live batch above verifies
+  the job function; a full elapsed three-hour cycle has not yet been observed.
+  Current daily status is scheduled; seven-day plans remain manager-triggered.
+- Let's Encrypt issued a trusted IP-address certificate with the correct IP SAN,
+  valid through October 17, 2026 at 14:03:04 UTC. Certbot 5.8.0 runs on the host.
+  `facility-cert-renew.timer` is enabled/active and checks twice daily.
+  `certbot renew --dry-run --run-deploy-hooks` passed, including stopping and
+  restoring the web container. Trusted HTTPS checks passed again afterward.
+- Public HTTP redirects to HTTPS. Frontend HTML/JS/CSS, health, both manager
+  logins, missing/wrong-password rejection, facility ownership and staff counts
+  passed through the public HTTPS URL with normal certificate verification.
+  Manager 1001's previously saved weekly plan was preserved.
+- The existing authenticated session, facility details, roster, decisions and
+  weekly plan survived an API restart. Production password/config files are
+  mode 600 and excluded from Git; password SSH login is disabled.
+
 Completed locally before packaging for Akamai:
 
 - Scheduled refresh now defaults to **three hours** via
@@ -169,8 +202,7 @@ Completed locally before packaging for Akamai:
 - The isolated test containers, volume and network were removed afterward;
   the ordinary local demo stack and its live decision were preserved.
 
-No Akamai instance has been provisioned or remotely tested. Ubuntu installation,
-public DNS and Certbot issuance/renewal must be verified on the target instance
-using [the deployment runbook](AKAMAI_DEPLOYMENT.md). Browser click-through and
-visual verification remain unverified; the checks above exercised HTTP APIs,
-served frontend assets and the production build.
+Operator commands are in [the deployment runbook](AKAMAI_DEPLOYMENT.md).
+Browser click-through and visual verification remain unverified because no
+browser is available to the automation connector. The checks above exercised
+HTTP APIs, served frontend assets, DOM interactions and the production build.

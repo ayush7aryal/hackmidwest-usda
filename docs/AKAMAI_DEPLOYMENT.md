@@ -9,11 +9,51 @@ Akamai also offers [managed MySQL](https://techdocs.akamai.com/cloud-computing/d
 but this MVP follows the blueprint's SQLite requirement. See Akamai's
 [persistent Docker volume guide](https://www.akamai.com/cloud/guides/understanding-docker-volumes/).
 
+## Current deployment
+
+- App: **https://172.236.119.150**
+- Akamai instance: `107866813`, label `hackmidwest-facility-operations`, Chicago
+  (`us-ord`), Ubuntu 24.04, 2 GB RAM / 1 vCPU / 50 GB disk.
+- Approved base price: $0.018/hour, capped at $12/month, before applicable
+  taxes/overages. Paid instance backups are disabled.
+- Cloud Firewall: `201494741`; public HTTP/HTTPS, SSH restricted to the deployment
+  computer's public IPv4. Update that rule in Akamai if your public IP changes.
+- Project directory: `/root/facility-operations`; Compose project:
+  `facility-operations`; database volume: `facility-operations_facility_data`.
+- Manager IDs: `1001` and `2001`. A private copy of the generated production
+  password is on the deployment computer at
+  `artifacts/akamai-manager-password.txt` (mode 600, excluded from Git).
+  Production configuration is `/root/facility-operations/.env` (mode 600).
+  The local app's `.env` and password are unchanged.
+- Dedicated SSH key on the deployment computer:
+  `~/.ssh/hackmidwest_akamai_ed25519`. Password SSH login is disabled.
+- The migrated database initially contained 7 facilities, 26 users, 3 shifts and
+  91 decisions. Existing data was imported before startup, without re-seeding.
+- Daily facility checks run every three hours; the seven-day plan is refreshed
+  from the manager UI. Added facilities are automatically included in scheduled
+  checks. Messages remain pending for manager review; email delivery is absent.
+
+Connect and inspect:
+
+```sh
+ssh -i ~/.ssh/hackmidwest_akamai_ed25519 root@172.236.119.150
+cd /root/facility-operations
+docker compose -f docker-compose.yml -f docker-compose.akamai.yml ps
+docker compose -f docker-compose.yml -f docker-compose.akamai.yml logs --tail=50 api
+systemctl list-timers facility-cert-renew.timer
+curl --fail https://172.236.119.150/api/health
+```
+
+The IP certificate uses `/opt/certbot/bin/certbot` and the host
+`facility-cert-renew.timer`, as documented below. Renewal briefly stops and
+restarts the web container; the API scheduler continues running.
+
 ## 1. Prepare the instance
 
 Create an Ubuntu 24.04 LTS Compute Instance with SSH-key access. A small instance
 with 2 GB RAM is a practical starting point for this MVP and its image builds.
-Point your domain's DNS A record at the instance. In an Akamai Cloud Firewall,
+If using a domain, point its DNS A record at the instance. For an IP-only
+deployment, follow the IP certificate section below. In an Akamai Cloud Firewall,
 allow SSH only from your IP, and HTTP/HTTPS (80/443). Keep port 8000 closed.
 Allow outbound HTTPS for source/model APIs and package/image downloads.
 
@@ -50,12 +90,12 @@ On your local computer, replace the host/user placeholders:
 ssh DEPLOY_USER@SERVER_IP 'mkdir -p ~/facility-operations'
 rsync -av --exclude='.env' --exclude='.git' --exclude='.venv' \
   --exclude='node_modules' --exclude='dist' --exclude='__pycache__' \
-  --exclude='.pytest_cache' --exclude='data' \
+  --exclude='.pytest_cache' --exclude='data' --exclude='artifacts' \
   /Users/ayusharyal/Desktop/hack_final/ DEPLOY_USER@SERVER_IP:~/facility-operations/
 ```
 
 This copies application code and lockfiles, without local secrets/SQLite data.
-Cloning your Git repository is an alternative once you create one.
+Cloning your Git repository is an alternative.
 
 Alternatively, copy the prepared source archive from your local computer:
 
@@ -161,9 +201,75 @@ sudo certbot renew --dry-run --run-deploy-hooks
 Renewal briefly stops the web container; the backend continues. See the
 [Certbot renewal guide](https://eff-certbot.readthedocs.io/en/stable/using.html#renewing-certificates).
 
+## HTTPS when using an IP address without a domain
+
+[Let's Encrypt supports IP address certificates](https://letsencrypt.org/2026/03/11/shorter-certs-certbot.html).
+They use the `shortlived` profile and last about six days, so automatic renewal
+is required. Use this section instead of the domain-specific certificate and
+`certbot.timer` commands above; keep the same Compose build/start steps and hooks. Ubuntu's bundled Certbot may be too old; use Certbot 5.4 or newer
+in an isolated host environment (the Docker stack still has only two services):
+
+```sh
+sudo apt-get install -y python3-venv
+sudo python3 -m venv /opt/certbot
+sudo /opt/certbot/bin/pip install 'certbot>=5.4,<6'
+sudo /opt/certbot/bin/certbot certonly --standalone --non-interactive \
+  --agree-tos --register-unsafely-without-email --cert-name facility \
+  --preferred-profile shortlived --ip-address SERVER_IP
+```
+
+Use the same `docker-compose.akamai.yml` override and certificate paths above.
+Nginx serves `https://SERVER_IP` and redirects HTTP to HTTPS. Keep inbound port
+80 available for certificate validation. The certificate covers the IP address,
+so no DNS record or self-signed certificate exception is needed.
+
+Use the pre/post renewal hooks above with the actual deployment path. Configure
+these host systemd units (using `/opt/certbot/bin/certbot` rather than an older
+system package):
+
+`/etc/systemd/system/facility-cert-renew.service`:
+
+```ini
+[Unit]
+Description=Renew facility HTTPS certificate
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/opt/certbot/bin/certbot renew --quiet
+```
+
+`/etc/systemd/system/facility-cert-renew.timer`:
+
+```ini
+[Unit]
+Description=Check facility certificate renewal twice daily
+
+[Timer]
+OnBootSec=10min
+OnUnitActiveSec=12h
+RandomizedDelaySec=30min
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+```
+
+```sh
+sudo systemctl daemon-reload
+sudo systemctl enable --now facility-cert-renew.timer
+sudo /opt/certbot/bin/certbot renew --dry-run --run-deploy-hooks
+sudo systemctl list-timers facility-cert-renew.timer
+```
+
+Renewal briefly restarts only the web container. App evaluations keep their
+three-hour cadence inside the API container; this host timer only manages TLS.
+
 ## 5. Verify the live demo
 
-1. Open `https://YOUR_DOMAIN`, select manager 1001/2001, and enter the password.
+1. Open `https://YOUR_DOMAIN` or `https://172.236.119.150`, select manager
+   1001/2001, and enter the password.
 2. Edit location ID, name, coordinates or hours; run **Check next 7 days**.
    Open each affected date/shift draft and review its recipients and text. Use
    **Evaluate today** for the single-day facility status.

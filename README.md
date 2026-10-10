@@ -45,7 +45,9 @@ verification. Application processing and SQLite stay on the Compute Instance.
 The override forces password login and adds HTTPS to Nginx with host-provided
 certificates, retaining exactly two services. A source-only deployment archive is
 available at `artifacts/facility-operations-akamai.tar.gz`; it excludes keys and
-local data. No instance has been provisioned.
+local data. The current deployment is **https://172.236.119.150** on a Chicago
+Ubuntu 24.04 instance. It uses an automatically renewed IP-address certificate;
+no domain is required. Deployment details and operator commands are in the runbook.
 
 ## Demo workflow
 
