@@ -4,6 +4,19 @@ Completed locally before packaging for Akamai:
 
 - `cd backend && uv run --locked pytest -q`: **201 passed**.
 - `cd frontend && npm ci && npm run build`: production build passed.
+- `cd frontend && npm test`: **14 DOM interaction tests passed** for the compact
+  week selector and Risk → Recipients → Message flow. Tests cover one date shown
+  at a time, mixed shift actions, expandable source notes/advisories, visible
+  urgent instructions, visible test/canceled/unknown statuses, dated shift hours,
+  location ID/coordinate edits, recipient
+  exclusions, action changes, essential confirmation, saved exports with actual
+  recipients, model/alert/recipient outages and unsaved navigation protection.
+  Reading steps does not mark unchanged drafts dirty; failed refreshes preserve
+  the previous plan/alerts with explicit warnings. These use synthetic HTTP
+  responses and a DOM environment, not a browser or live model.
+- UX update moves policy/evidence, daily details, history and decision records
+  behind disclosures. One selected date and one review step are shown at a time.
+  No backend schema, policy, tool, recipient or approval rules changed.
 - Live NWS + Open-Meteo + OpenAI/Strands evaluation through Nginx saved a
   `NORMAL` decision, real source evidence, filtered staff and a draft for review.
   The decision remains `PENDING`; delivery timestamps are empty.

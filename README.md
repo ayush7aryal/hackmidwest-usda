@@ -49,17 +49,22 @@ local data. No instance has been provisioned.
 
 ## Demo workflow
 
-1. Sign in; edit **location ID, name, latitude, longitude**, timezone or hours.
-2. Review **Current NWS alerts** and their instructions; this feed refreshes every
-   minute while the dashboard is open. Click **Check next 7 days** for dated, shift-specific planning
-   using NWS forecast/alerts and modeled AQI. **Evaluate today** retains the
-   single-day status check.
-3. Inspect each date and open each affected shift draft; review evidence,
-   timestamps, policy thresholds, uncertainty and advice.
-4. Review every employee's schedule, essential/remote flags and selection reason.
-5. Choose affected on-site or explicit facility-wide scope; adjust eligible staff.
-6. Edit posture, rationale, subject and message. Confirm essential-staff instructions.
-7. Save, approve or reject; download the labeled saved message. Reopen history.
+1. Sign in and choose **Check next 7 days**. **Edit location** opens a focused
+   form for ID, name, coordinates, timezone and hours.
+2. The week strip highlights affected shifts and missing coverage. Select one
+   date to see its recommendation and shift drafts; pending drafts open first.
+3. Open a draft and follow **Risk → Recipients → Message**. Choose the operational
+   action, review the selected staff, then edit the subject and message.
+4. **Excluded** staff remain available for inspection. Facility-wide scope
+   explicitly widens the audience. Confirm essential-staff instructions before
+   approving. A failed recipient refresh blocks approval until retried.
+5. Save, approve or reject. Download the saved message with its recipient list.
+   Nothing is emailed. Past checks and decision records are expandable.
+
+Urgent NWS instructions stay visible; advisory details, source notes, policy and
+confidence are available on demand. Missing coverage and outdated alerts remain
+explicitly labeled. Refresh failures retain the previous weekly check with a
+warning. Unsaved draft edits are protected when leaving the review flow.
 
 Creating a facility reuses the manager's current synthetic employee sheet: the
 manager and existing staff move to the new facility with the same employee IDs,
@@ -255,15 +260,30 @@ cd backend
 uv run --locked pytest -q
 ```
 
-Tests cover schema/seeds/constraints, auth/ownership, atomic ID edits, source
+Frontend interaction tests (synthetic data, no live model/source calls):
+
+```sh
+cd frontend
+npm ci
+npm test
+npm run build
+```
+
+These exercise the week selector, three-step review, date-specific schedules,
+exclusions, action changes, essential confirmation, exports, outage recovery,
+location edits and unsaved navigation in a DOM environment. No browser visual
+verification is implied.
+
+Backend tests cover schema/seeds/constraints, auth/ownership, atomic ID edits, source
 failures/retries, all five postures, invalid model advice, date/DST shift filtering,
 essential review, fresh selections, approval/history, persistence and scheduling.
 Fixtures are explicitly synthetic; live evaluation never uses them.
 
 Runtime dependencies: FastAPI/Uvicorn, `httpx` for the two data sources,
 `strands-agents[openai]` for the adviser, APScheduler for the required hourly job.
-Pytest is development-only. React, ReactDOM and Vite are the only direct frontend
-packages. Both dependency lockfiles are included.
+Pytest is development-only. React and ReactDOM are the only browser runtime
+packages. Vite builds the app; jsdom and esbuild also support frontend tests.
+Both dependency lockfiles are included.
 
 ## Operations
 

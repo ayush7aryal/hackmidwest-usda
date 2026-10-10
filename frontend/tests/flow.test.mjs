@@ -1,0 +1,274 @@
+import assert from 'node:assert/strict'
+import { afterEach, beforeEach, test } from 'node:test'
+import { readFile } from 'node:fs/promises'
+import { createRequire } from 'node:module'
+import React, { act } from 'react'
+import { build } from 'esbuild'
+import { JSDOM } from 'jsdom'
+
+// Exercise the actual app with DOM events and synthetic HTTP responses. No live
+// source/model requests, email delivery, or browser automation are involved.
+const dom = new JSDOM('<!doctype html><html><body><div id="root"></div></body></html>', { url: 'http://localhost:8080/' })
+Object.assign(globalThis, { window: dom.window, document: dom.window.document, sessionStorage: dom.window.sessionStorage, IS_REACT_ACT_ENVIRONMENT: true })
+window.scrollTo = () => {}
+window.confirm = () => false
+const { createRoot } = await import('react-dom/client')
+const bundle = await build({ stdin: { contents: await readFile(new URL('../src/App.jsx', import.meta.url), 'utf8'), resolveDir: new URL('../src/', import.meta.url).pathname, loader: 'jsx' }, bundle: true, write: false, platform: 'node', format: 'cjs', external: ['react'] })
+const module = { exports: {} }
+new Function('require', 'module', 'exports', bundle.outputFiles[0].text)(createRequire(import.meta.url), module, module.exports)
+const App = module.exports.default
+const response = (data, status = 200) => new Response(JSON.stringify(data), { status, headers: { 'Content-Type': 'application/json' } })
+let root, fixture, requests, failPreview, failWeek, failAlerts, downloadBlob, downloadName
+
+function employee(id, name, included, reason, essential = false, remote = false) {
+  return { emp_id: id, name, email: `${id}@example.com`, location_id: 1, shift_id: 1, shift_name: 'Weekday early',
+    is_manager: false, is_essential: essential, is_teleworking: remote, weekly_hours: { wed: ['08:00', '16:00'], thu: ['08:00', '16:00'] },
+    included, reason, requires_manager_review: included && essential }
+}
+
+function makeFixture() {
+  const rows = [employee(1101, 'Casey Demo', true, 'scheduled_on_site'), employee(1104, 'Avery Demo', true, 'scheduled_on_site', true),
+    employee(1103, 'Riley Remote', false, 'already_remote', false, true), employee(1106, 'Robin Off', false, 'not_scheduled')]
+  rows[3].weekly_hours.wed = null
+  const days = Array.from({ length: 7 }, (_, i) => ({ date: `2026-10-${12 + i}`, state: 'COMPLETED', posture: 'NORMAL', reason: `Synthetic day ${i + 1}: no automatic schedule change.`, warnings: [], decision_ids: [100 + i], message_groups: [] }))
+  days[2] = { ...days[2], posture: 'TELEWORK', reason: 'Synthetic Wednesday storm affects on-site shifts. Review each draft.', decision_ids: [14, 15], message_groups: [
+    { decision_id: 14, shift_id: 1, shift_name: 'Weekday early', start: '2026-10-14T13:00:00Z', end: '2026-10-14T21:00:00Z', posture: 'TELEWORK', recipient_count: 2, manager_status: 'PENDING' },
+    { decision_id: 15, shift_id: 2, shift_name: 'Weekday late', start: '2026-10-14T15:00:00Z', end: '2026-10-14T23:00:00Z', posture: 'TELEWORK', recipient_count: 2, manager_status: 'PENDING' }] }
+  days[3].warnings = ['Modeled air-quality coverage is incomplete.']
+  days[4] = { date: days[4].date, state: 'INSUFFICIENT_DATA', posture: null, reason: 'Synthetic weather coverage unavailable.', warnings: [], decision_ids: [], message_groups: [] }
+  const alerts = [
+    { event: 'Synthetic Tornado Warning', severity: 'Extreme', status: 'Actual', messageType: 'Alert', instruction: 'SYNTHETIC: Take shelter immediately.', description: 'Synthetic tornado description.', onset: '2026-10-14T13:00:00Z', ends: '2026-10-14T21:00:00Z', url: 'https://api.weather.gov/alerts/test-1' },
+    { event: 'Synthetic Surf Advisory', severity: 'Minor', status: 'Actual', messageType: 'Alert', instruction: 'SYNTHETIC: Avoid the surf.', description: 'Synthetic surf description.', onset: '2026-10-14T13:00:00Z', ends: '2026-10-14T21:00:00Z', url: 'https://api.weather.gov/alerts/test-2' }]
+  const office = { id: 1, name: 'Synthetic Test Facility', latitude: 41.8, longitude: -87.6, timezone: 'America/Chicago', open_time: '08:00', close_time: '18:00', last_checked_at: null, status: 'NORMAL' }
+  const decision = { id: 14, location_id: 1, evaluated_at: '2026-10-10T19:00:00Z', affected_start: '2026-10-14T13:00:00Z', affected_end: '2026-10-14T21:00:00Z', posture: 'TELEWORK', confidence: .5,
+    reason: 'Synthetic Wednesday storm affects this dated early shift. Manager review required.', manager_status: 'PENDING', draft_subject: 'Synthetic Wednesday early shift', draft_body: 'DRAFT — synthetic manager-reviewed shift instructions.', recipients: rows, evidence: [], thresholds: [],
+    alternatives: { facility_snapshot: office, message_group: days[2].message_groups[0], warnings: ['Synthetic forecast requires review.'], inputs: { weather: { alerts } }, original_recommendation: { posture: 'TELEWORK', reason: 'Synthetic original advice.' } }, sent_at: null }
+  return { office, decision, alerts, week: { state: 'COMPLETED', evaluated_at: '2026-10-10T19:00:00Z', message: 'Synthetic weekly check', days } }
+}
+
+function previewRows(body) {
+  return fixture.decision.recipients.map(row => {
+    const eligible = body.scope === 'all_staff' || (body.posture !== 'NORMAL' && !row.is_teleworking && row.weekly_hours.wed)
+    const included = Boolean(eligible && !body.exclude_ids?.includes(row.emp_id))
+    return { ...row, included, requires_manager_review: included && row.is_essential,
+      reason: body.exclude_ids?.includes(row.emp_id) ? 'manager_excluded' : included ? 'scheduled_on_site' : row.is_teleworking ? 'already_remote' : 'not_scheduled' }
+  })
+}
+
+beforeEach(() => {
+  fixture = makeFixture(); requests = []; failPreview = false; failWeek = false; failAlerts = false; downloadBlob = null; downloadName = null
+  window.history.replaceState(null, '', '/')
+  sessionStorage.clear(); sessionStorage.setItem('facility_token', 'synthetic-token'); sessionStorage.setItem('facility_manager', 'Synthetic Manager')
+  document.body.innerHTML = '<div id="root"></div>'
+  URL.createObjectURL = blob => { downloadBlob = blob; return 'blob:synthetic-export' }
+  URL.revokeObjectURL = () => {}
+  window.HTMLAnchorElement.prototype.click = function () { downloadName = this.download }
+  globalThis.fetch = async (path, options = {}) => {
+    const body = options.body ? JSON.parse(options.body) : undefined
+    requests.push({ path, method: options.method || 'GET', body })
+    if (path === '/api/locations') return response([fixture.office])
+    if (path === `/api/locations/${fixture.office.id}/decisions`) return response([fixture.decision])
+    if (path === `/api/locations/${fixture.office.id}/week-plan`) return response(fixture.week)
+    if (path === `/api/locations/${fixture.office.id}/weather-alerts`) return response(failAlerts ? { available: false, alerts: [], error: 'Synthetic alert outage' } : { available: true, alerts: fixture.alerts, fetched_at: '2026-10-10T19:00:00Z' })
+    if (path === '/api/locations/1/evaluate-week') return response(failWeek ? { state: 'INSUFFICIENT_DATA', message: 'Synthetic model outage', days: [] } : fixture.week)
+    if (path === '/api/decisions/14' && !body) return response(fixture.decision)
+    if (path === '/api/decisions/14/recipients') return failPreview ? response({ detail: 'Synthetic recipient outage' }, 503) : response(previewRows(body))
+    if (path === '/api/decisions/14/review') {
+      if (body.status === 'APPROVED' && !body.essential_confirmed) return response({ detail: 'Essential confirmation required' }, 422)
+      fixture.decision = { ...fixture.decision, ...body, manager_status: body.status, recipients: previewRows(body), alternatives: { ...fixture.decision.alternatives, recipient_selection: { scope: body.scope, include_ids: body.include_ids, exclude_ids: body.exclude_ids } } }
+      return response(fixture.decision)
+    }
+    if (path === '/api/locations/1' && options.method === 'PATCH') { fixture.office = { ...fixture.office, ...body }; fixture.week = null; fixture.alerts = []; return response(fixture.office) }
+    throw new Error(`Unexpected test request: ${path}`)
+  }
+  root = createRoot(document.getElementById('root'))
+})
+
+afterEach(async () => { await act(async () => root.unmount()) })
+const tick = () => new Promise(resolve => setImmediate(resolve))
+async function mount(hash = '') { window.history.replaceState(null, '', `/${hash}`); await act(async () => { root.render(React.createElement(App)); await tick() }) }
+function button(name) { const found = [...document.querySelectorAll('button')].find(item => typeof name === 'string' ? item.textContent.trim() === name : name.test(item.textContent)); assert(found, `Missing button: ${name}`); return found }
+async function click(element) { await act(async () => { element.dispatchEvent(new window.MouseEvent('click', { bubbles: true, cancelable: true })); await tick() }) }
+async function change(element, value) {
+  await act(async () => {
+    if (element.tagName === 'SELECT') { element.value = value; element.dispatchEvent(new window.Event('change', { bubbles: true })) }
+    else { Object.getOwnPropertyDescriptor(element.tagName === 'TEXTAREA' ? window.HTMLTextAreaElement.prototype : window.HTMLInputElement.prototype, 'value').set.call(element, value); element.dispatchEvent(new window.Event('input', { bubbles: true })) }
+    await tick()
+  })
+}
+function outsideClosedDetails(element) { for (let node = element.parentElement; node; node = node.parentElement) if (node.tagName === 'DETAILS' && !node.open) return false; return true }
+
+// A compact dashboard must still surface exceptions and keep evidence reachable.
+test('week selector opens the first pending day and shows only one date detail', async () => {
+  await mount()
+  assert.equal(document.querySelectorAll('.day-button').length, 7)
+  assert.equal(document.querySelector('[aria-pressed=true].day-button').getAttribute('aria-label'), 'Wednesday, Oct 14')
+  assert.equal(document.querySelectorAll('.selected-day').length, 1)
+  assert.equal(document.querySelectorAll('.shift-draft').length, 2)
+  assert.equal(document.querySelector('.history-panel').open, false)
+  await click(document.querySelector('[aria-label="Monday, Oct 12"]'))
+  assert.match(document.querySelector('.selected-day').textContent, /Synthetic day 1/)
+  assert.equal(document.querySelectorAll('.shift-draft').length, 0)
+  assert.equal(document.querySelector('.selected-day').textContent.includes('Synthetic Wednesday storm'), false)
+})
+
+test('coverage gaps and source notes remain visible without showing every explanation', async () => {
+  await mount()
+  assert.match(document.querySelector('.week-plan').textContent, /1 day unavailable/)
+  await click(document.querySelector('[aria-label="Thursday, Oct 15"]'))
+  const notes = document.querySelector('.selected-day .source-notes')
+  assert.match(notes.querySelector('summary').textContent, /Limited forecast coverage/)
+  assert.equal(notes.open, false)
+  await click(notes.querySelector('summary'))
+  assert.equal(notes.open, true)
+  await click(document.querySelector('[aria-label="Friday, Oct 16"]'))
+  assert.match(document.querySelector('.selected-day').textContent, /No all-clear or employee draft/)
+  assert.equal(document.querySelectorAll('.selected-day a').length, 0)
+})
+
+test('urgent instructions stay visible and advisory details can be expanded', async () => {
+  await mount()
+  const alerts = [...document.querySelectorAll('.alert-item')]
+  assert.equal(outsideClosedDetails(alerts[0].querySelector('.alert-description')), true)
+  assert.match(alerts[0].textContent, /Take shelter immediately/)
+  const advisory = alerts[1].querySelector('details')
+  assert.equal(advisory.open, false)
+  await click(advisory.querySelector('summary'))
+  assert.equal(advisory.open, true)
+  assert.match(advisory.textContent, /Avoid the surf/)
+})
+
+test('failed weekly refresh retains the saved plan and labels it as a previous check', async () => {
+  await mount(); failWeek = true
+  await click(button('Check next 7 days ↗'))
+  assert.match(document.querySelector('[role=alert]').textContent, /Showing the previous weekly check/)
+  assert.equal(document.querySelectorAll('.day-button').length, 7)
+  assert.equal(document.querySelectorAll('.shift-draft').length, 2)
+})
+
+test('location editing has its own focused form and preserves coordinate/ID editing', async () => {
+  await mount(); await click(button('Edit location'))
+  assert.equal(document.querySelector('.week-plan'), null)
+  const inputs = document.querySelectorAll('.form-grid input')
+  assert.equal(inputs.length, 7)
+  const named = title => [...document.querySelectorAll('label')].find(item => item.textContent === title).querySelector('input')
+  await change(named('Location ID'), '9'); await change(named('Latitude'), '30.1766'); await change(named('Longitude'), '-85.8055')
+  await click(button('Save facility'))
+  const saved = requests.find(item => item.method === 'PATCH')
+  assert.equal(saved.body.id, 9); assert.equal(saved.body.latitude, 30.1766); assert.equal(saved.body.longitude, -85.8055)
+  assert(document.querySelector('.empty-plan'))
+  assert.equal(document.querySelector('[role=alert]'), null)
+})
+
+test('three-step review keeps excluded staff available and shows only affected-day hours', async () => {
+  await mount('#decision/14')
+  assert.equal(document.querySelector('h2').textContent, 'Review the risk')
+  assert.equal(document.querySelector('.message-input'), null)
+  assert.equal(document.querySelector('.disclosure').open, false)
+  await click(button('Continue to recipients →'))
+  assert.equal(document.querySelectorAll('tbody tr').length, 2)
+  assert.match(document.querySelector('tbody').textContent, /wed 08:00–16:00/)
+  assert.equal(document.querySelector('tbody').textContent.includes('thu'), false)
+  await click(button('Excluded (2)'))
+  assert.match(document.querySelector('tbody').textContent, /Riley Remote/)
+  assert.equal(document.querySelector('[aria-label="Include Riley Remote"]').disabled, true)
+  await change(document.querySelector('select'), 'all_staff')
+  assert.equal(document.querySelectorAll('tbody tr').length, 4)
+  assert.equal(document.querySelector('[aria-label="Include Riley Remote"]').disabled, false)
+})
+
+test('essential confirmation gates approval and saved export includes the actual recipient list', async () => {
+  await mount('#decision/14'); await click(button('Continue to recipients →')); await click(button('Continue to message →'))
+  assert.equal(document.querySelector('.message-input') !== null, true)
+  assert.equal(button('Approve draft').disabled, true)
+  await click(document.querySelector('.check-notice input'))
+  assert.equal(button('Approve draft').disabled, false)
+  await change(document.querySelector('.message-input'), 'SYNTHETIC: Manager-approved Wednesday shift instructions.')
+  assert.equal(button('Download saved message ↓').disabled, true)
+  await click(button('Approve draft'))
+  const saved = requests.find(item => item.path.endsWith('/review'))
+  assert.equal(saved.body.status, 'APPROVED'); assert.equal(saved.body.essential_confirmed, true)
+  assert.equal(saved.body.draft_body, 'SYNTHETIC: Manager-approved Wednesday shift instructions.')
+  assert.match(document.querySelector('.success').textContent, /Draft approved/)
+  await click(button('Download saved message ↓'))
+  assert.match(await downloadBlob.text(), /To: 1101@example.com, 1104@example.com/)
+  assert.equal(downloadName, 'decision-14-approved.txt')
+  assert.equal(requests.some(item => /send|mail/.test(item.path)), false)
+})
+
+test('recipient refresh failure blocks approval until a successful retry', async () => {
+  await mount('#decision/14'); failPreview = true
+  await click(button('Continue to recipients →'))
+  assert.match(document.querySelector('[role=alert]').textContent, /Synthetic recipient outage/)
+  await click(button('3Message'))
+  assert.equal(button('Approve draft').matches(':disabled'), true)
+  failPreview = false
+  await click(button('2Recipients')); await click(button('Refresh staff')); await click(button('Continue to message →'))
+  await click(document.querySelector('.check-notice input'))
+  assert.equal(button('Approve draft').matches(':disabled'), false)
+})
+
+test('unsaved edits can cancel navigation and recipient exclusions survive the next step', async () => {
+  await mount('#decision/14'); await click(button('Continue to recipients →'))
+  await click(document.querySelector('[aria-label="Include Casey Demo"]'))
+  assert.equal(button('Selected (1)') !== null, true)
+  await click(button('Continue to message →'))
+  assert.match(document.querySelector('.review-panel').textContent, /1 recipient/)
+  const nav = new window.MouseEvent('click', { bubbles: true, cancelable: true })
+  await act(async () => document.querySelector('.back').dispatchEvent(nav))
+  assert.equal(nav.defaultPrevented, true)
+  await click(button('Save draft'))
+  const saved = requests.find(item => item.path.endsWith('/review'))
+  assert.deepEqual(saved.body.exclude_ids, [1101])
+})
+
+test('reading steps does not mark a draft dirty and browser navigation protects actual edits', async () => {
+  await mount('#decision/14'); await click(button('Continue to recipients →')); await click(button('Continue to message →'))
+  assert.equal(button('Download saved message ↓').disabled, false)
+  await change(document.querySelector('.message-input'), 'SYNTHETIC: Unsaved manager instructions.')
+  window.history.pushState(null, '', '/#')
+  await act(async () => { window.dispatchEvent(new window.HashChangeEvent('hashchange')); await tick() })
+  assert.equal(window.location.hash, '#decision/14')
+  assert(document.querySelector('.message-input'))
+  assert.equal(document.querySelector('.message-input').value, 'SYNTHETIC: Unsaved manager instructions.')
+})
+
+test('mixed-action days show the actual action on each shift draft', async () => {
+  fixture.week.days[2].message_groups[0].posture = 'DELAYED_OPENING'
+  fixture.week.days[2].message_groups[1].posture = 'EARLY_DISMISSAL'
+  await mount()
+  assert.match(document.querySelector('.selected-day').textContent, /Multiple shift actions/)
+  const drafts = document.querySelectorAll('.shift-draft')
+  assert.match(drafts[0].textContent, /Delayed opening/)
+  assert.match(drafts[1].textContent, /Early dismissal/)
+})
+
+test('alert outages keep previous instructions visible and explicitly mark them outdated', async () => {
+  await mount(); failAlerts = true
+  await click(document.querySelector('.weather-alerts button'))
+  assert.match(document.querySelector('.weather-alerts [role=alert]').textContent, /Saved alerts below may be outdated/)
+  assert.equal(document.querySelectorAll('.alert-item').length, 2)
+  assert.match(document.querySelector('.weather-alerts').textContent, /Take shelter immediately/)
+})
+
+test('changing the action recomputes recipients before the next step', async () => {
+  await mount('#decision/14')
+  await change(document.querySelector('select'), 'NORMAL')
+  assert.equal(requests.find(item => item.path.endsWith('/recipients')).body.posture, 'NORMAL')
+  await click(button('Continue to recipients →'))
+  assert(button('Selected (0)'))
+  await click(button('Continue to message →'))
+  assert.match(document.querySelector('.review-panel').textContent, /No recipients selected/)
+  assert.match(document.querySelector('.review-panel').textContent, /Your action changed/)
+})
+
+test('canceled, test and unknown alert statuses stay visible without presenting old instructions as urgent', async () => {
+  fixture.alerts[0].messageType = 'Cancel'
+  fixture.alerts[1].status = 'Test'
+  fixture.alerts.push({ ...fixture.alerts[0], event: 'Synthetic Unknown Alert', url: 'https://api.weather.gov/alerts/test-3', messageType: 'Alert', status: null })
+  await mount()
+  const alerts = document.querySelector('.weather-alerts')
+  assert.match(alerts.textContent, /Canceled/); assert.match(alerts.textContent, /Test/); assert.match(alerts.textContent, /Status unknown/)
+  assert.equal(alerts.querySelectorAll('.alert-description[role=alert]').length, 0)
+  assert.equal(alerts.querySelectorAll('.alert-item').length, 3)
+})

@@ -1,17 +1,30 @@
-import React, { useEffect, useState } from 'react'
+import React, { useCallback, useEffect, useRef, useState } from 'react'
 import { api } from './api.js'
 
 const POSTURES = ['NORMAL', 'DELAYED_OPENING', 'EARLY_DISMISSAL', 'TELEWORK', 'CLOSED']
-const label = value => value === 'NORMAL' ? 'NORMAL OPERATIONS' : value?.replaceAll('_', ' ') || '—'
-const when = (value, timezone) => {
-  if (!value) return 'Not provided'
-  const instant = new Date(value)
-  if (!Number.isFinite(instant.getTime())) return 'Time unavailable · check NWS source'
-  return new Intl.DateTimeFormat('en-US', {
-    dateStyle: 'medium', timeStyle: 'short', ...(timezone ? { timeZone: timezone } : {}),
-  }).format(instant)
-}
+const LABELS = { NORMAL: 'Normal operations', DELAYED_OPENING: 'Delayed opening', EARLY_DISMISSAL: 'Early dismissal', TELEWORK: 'Work remotely', CLOSED: 'Closed', PENDING: 'Needs review', APPROVED: 'Approved', REJECTED: 'Rejected' }
+const REASONS = { scheduled_on_site: 'Scheduled on-site', manager_selected: 'Selected by manager', facility_wide: 'Facility-wide notice', not_scheduled: 'Outside affected hours', already_remote: 'Already remote', manager: 'Manager', no_disruption: 'No schedule change', invalid_shift: 'Schedule needs correction', manager_excluded: 'Excluded by manager' }
+const label = value => LABELS[value] || value?.replaceAll('_', ' ') || '—'
 const decisionFromHash = () => window.location.hash.match(/^#decision\/(\d+)$/)?.[1] || null
+const audienceDefault = () => ({ scope: 'affected', include_ids: [], exclude_ids: [] })
+
+function recipientState(rows) {
+  return JSON.stringify(rows.map(row => [row.emp_id, row.name, row.email, row.shift_id, row.weekly_hours,
+    Boolean(row.included), Boolean(row.is_essential), Boolean(row.is_teleworking), Boolean(row.is_manager),
+    Boolean(row.requires_manager_review), row.reason]))
+}
+
+function when(value, timezone, clockOnly = false) {
+  if (!value) return 'Not checked yet'
+  const instant = new Date(value)
+  if (!Number.isFinite(instant.getTime())) return 'Time unavailable'
+  const options = clockOnly ? { hour: 'numeric', minute: '2-digit', timeZoneName: 'short' } : { dateStyle: 'medium', timeStyle: 'short' }
+  return new Intl.DateTimeFormat('en-US', { ...options, ...(timezone ? { timeZone: timezone } : {}) }).format(instant)
+}
+
+function calendarDate(value, short = false) {
+  return new Intl.DateTimeFormat('en-US', { weekday: short ? 'short' : 'long', month: 'short', day: 'numeric', timeZone: 'UTC' }).format(new Date(`${value}T12:00:00Z`))
+}
 
 function Badge({ children, tone = '' }) {
   return <span className={`badge ${tone}`}>{children}</span>
@@ -21,28 +34,44 @@ function ErrorMessage({ children }) {
   return children ? <div className="notice error" role="alert">{children}</div> : null
 }
 
+function ReasonText({ text = '' }) {
+  const [expanded, setExpanded] = useState(false)
+  const long = text.length > 260
+  return <div className="reason-text"><p>{long && !expanded ? `${text.slice(0, 260).replace(/\s+\S*$/, '')}…` : text}</p>
+    {long && <button className="text-button" aria-expanded={expanded} onClick={() => setExpanded(value => !value)}>{expanded ? 'Show less' : 'Read full explanation'}</button>}</div>
+}
+
+function SourceNotes({ warnings = [] }) {
+  if (!warnings.length) return null
+  const limited = warnings.some(item => /unavailable|incomplete|coverage/i.test(item))
+  return <details className="source-notes"><summary>{limited ? 'Limited forecast coverage' : 'Conditions need manager review'} <span>· {warnings.length} source note{warnings.length === 1 ? '' : 's'}</span></summary>
+    <ul>{warnings.map((warning, index) => <li key={index}>{warning}</li>)}</ul></details>
+}
+
 function WeatherAlerts({ alerts = [], timezone, current = false, available = true, fetchedAt, sourceUrl, error, onRefresh, refreshing }) {
   if (!current && !alerts.length) return null
-  return <aside className="weather-alerts" aria-label="NWS weather alerts" role={alerts.length || !available ? 'alert' : 'status'}>
-    <div className="section-head"><h3>{current ? 'Current NWS alerts' : `${alerts.length} NWS alert${alerts.length === 1 ? '' : 's'} at this evaluation`} · manager review</h3>
-      {onRefresh && <button disabled={refreshing} onClick={onRefresh}>{refreshing ? 'Checking alerts…' : 'Refresh alerts'}</button>}</div>
-    {current && <p className="help">{fetchedAt ? `Checked ${when(fetchedAt, timezone)}. ` : ''}Alerts refresh every minute while this dashboard is open.</p>}
-    {!available && <p className="warning-text">{error || 'NWS alerts are unavailable.'} Cannot confirm current alert conditions. {alerts.length ? 'The alerts below are from the last successful check and may be outdated.' : 'Check the NWS source directly.'}</p>}
-    {sourceUrl && <a href={sourceUrl} target="_blank" rel="noreferrer">Open NWS alert feed ↗</a>}
-    {available && !alerts.length && <p>NWS returned no active alerts for these coordinates. This does not guarantee hazard-free conditions.</p>}
-    {!!alerts.length && <p>Review every alert below, including advisories and alerts outside office hours. You decide whether to change operations, prepare a safety message, or take no action. Normal operations means no automatic office schedule change.</p>}
-    {alerts.map((alert, index) => <article key={alert.url || index}>
-      <a href={alert.url} target="_blank" rel="noreferrer"><strong>{alert.event || 'NWS alert (type not provided)'} ↗</strong></a>
-      <p className="help">{alert.severity || 'Unknown'} severity · {alert.urgency || 'Unknown urgency'} · {alert.certainty || 'Unknown certainty'}{alert.areaDesc ? ` · ${alert.areaDesc}` : ''}</p>
-      {(alert.status || alert.messageType) && <p className="help">{alert.status || 'Unknown status'} · {alert.messageType || 'Unknown message type'}{alert.response ? ` · NWS response: ${alert.response}` : ''}</p>}
-      <p className="help">{when(alert.onset || alert.effective, timezone)} – {when(alert.ends || alert.expires, timezone)} {timezone}</p>
-      {alert.headline && <p><strong>{alert.headline}</strong></p>}
-      <p className="alert-description"><strong>NWS instructions: </strong>{alert.instruction || 'No separate instructions were provided. Read the full alert and NWS source.'}</p>
-      <details><summary>Read full alert message</summary>
-        <p className="alert-description">{alert.description || 'No description provided. Open the NWS source for details.'}</p>
-      </details>
-    </article>)}
-    {current && <p className="help">These source messages are shown independently of the agent. No action or email is automatic.</p>}
+  return <aside className={`weather-alerts ${!alerts.length && available ? 'quiet-alerts' : ''}`} aria-label="NWS weather alerts">
+    <div className="section-head"><div><h2>{alerts.length ? `${alerts.length} weather alert${alerts.length === 1 ? '' : 's'}` : available ? 'No active NWS alerts' : 'Weather alerts unavailable'}</h2>
+      {current && <p className="help">{fetchedAt ? `Updated ${when(fetchedAt, timezone)}` : 'Checking NWS'} · refreshes every minute</p>}</div>
+      <div className="inline-actions">{sourceUrl && <a href={sourceUrl} target="_blank" rel="noreferrer">NWS ↗</a>}{onRefresh && <button className="small-button" disabled={refreshing} onClick={onRefresh}>{refreshing ? 'Checking…' : 'Refresh'}</button>}</div></div>
+    {!available && <p className="warning-text" role="alert">{error || 'Current alerts could not be checked.'} {alerts.length ? 'Saved alerts below may be outdated.' : 'Check the NWS source.'}</p>}
+    {available && !alerts.length && <p className="help">No active alerts does not guarantee hazard-free conditions.</p>}
+    {alerts.map((alert, index) => {
+      const urgent = ['Severe', 'Extreme'].includes(alert.severity) && alert.status === 'Actual' && alert.messageType !== 'Cancel'
+      const status = alert.messageType === 'Cancel' ? 'Canceled' : alert.status !== 'Actual' ? alert.status || 'Status unknown' : null
+      return <article className="alert-item" key={alert.url || index}>
+        <div className="section-head"><a href={alert.url} target="_blank" rel="noreferrer"><strong>{alert.event || 'NWS alert'} ↗</strong></a><div className="inline-actions"><Badge tone={urgent ? 'closed' : 'pending'}>{alert.severity || 'Unknown severity'}</Badge>{status && <Badge>{status}</Badge>}</div></div>
+        <p className="help">{when(alert.onset || alert.effective, timezone)} – {when(alert.ends || alert.expires, timezone)}</p>
+        {urgent && <p className="alert-description" role="alert"><strong>NWS instructions: </strong>{alert.instruction || 'Read the full alert for instructions.'}</p>}
+        <details><summary>{urgent ? 'More alert details' : 'Read instructions and details'}</summary>
+          {!urgent && <p className="alert-description"><strong>NWS instructions: </strong>{alert.instruction || 'No separate instructions provided. Check the NWS source.'}</p>}
+          {alert.headline && <p><strong>{alert.headline}</strong></p>}
+          <p className="alert-description">{alert.description || 'No description provided.'}</p>
+          <p className="help">{alert.urgency || 'Unknown urgency'} · {alert.certainty || 'Unknown certainty'} · {alert.status || 'Unknown status'} · {alert.messageType || 'Unknown message type'}</p>
+          {alert.areaDesc && <p className="help">{alert.areaDesc}</p>}{alert.response && <p className="help">NWS response: {alert.response}</p>}
+        </details>
+      </article>
+    })}
   </aside>
 }
 
@@ -52,8 +81,7 @@ function Login({ onLogin }) {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   async function submit(event) {
-    event.preventDefault()
-    setBusy(true); setError('')
+    event.preventDefault(); setBusy(true); setError('')
     try {
       const result = await api('/login', { method: 'POST', body: { emp_id: Number(employee), password } })
       sessionStorage.setItem('facility_token', result.access_token)
@@ -61,34 +89,23 @@ function Login({ onLogin }) {
       onLogin()
     } catch (error) { setError(error.message) } finally { setBusy(false) }
   }
-  return <main className="login-layout">
-    <section className="login-intro"><p className="eyebrow">FACILITY OPERATIONS AI</p>
-      <h1>Clear evidence.<br />Considered decisions.</h1>
-      <p>Weather and air quality can change the working day. Review the risks, check your team’s schedules, and prepare the right message.</p>
-      <div className="login-principle"><span>01</span><p>Live signals from NWS and Open-Meteo</p></div>
-      <div className="login-principle"><span>02</span><p>Advice with a manager in control</p></div>
-      <div className="login-principle"><span>03</span><p>Messages prepared. Email delivery off.</p></div>
-    </section>
-    <section className="card login-card"><p className="eyebrow">MANAGER ACCESS</p><h2>Welcome back</h2>
-      <p className="muted">Choose your seeded manager account.</p>
-      <form onSubmit={submit}><label>Manager account<select value={employee} onChange={e => setEmployee(e.target.value)}>
-        <option value="1001">Alex Morgan · Chicago</option><option value="2001">Jordan Lee · Denver</option>
-      </select></label>
-      <label>Manager password<input type="password" autoComplete="current-password" value={password} onChange={e => setPassword(e.target.value)} placeholder="Enter the configured manager password" /></label>
-      <p className="help">A configured password is required even in local demo mode. Leave blank only if no password is configured.</p><ErrorMessage>{error}</ErrorMessage>
-      <button className="primary full" disabled={busy}>{busy ? 'Signing in…' : 'Open dashboard →'}</button></form>
-      <p className="help login-foot">Synthetic employees · US offices · Human review required</p>
-    </section>
-  </main>
+  return <main className="login-layout"><section className="login-intro"><p className="eyebrow">FACILITY OPERATIONS</p>
+    <h1>A clearer plan.<br />A prepared team.</h1><p>See upcoming disruptions, review affected shifts, and prepare your team's message.</p>
+    <div className="login-flow"><span>01 Check the week</span><span>02 Review your team</span><span>03 Prepare a message</span></div>
+  </section><section className="card login-card"><p className="eyebrow">MANAGER ACCESS</p><h2>Welcome back</h2>
+    <form onSubmit={submit}><label>Manager account<select value={employee} onChange={event => setEmployee(event.target.value)}>
+      <option value="1001">Alex Morgan</option><option value="2001">Jordan Lee</option></select></label>
+      <label>Password<input type="password" autoComplete="current-password" value={password} onChange={event => setPassword(event.target.value)} placeholder="Manager password" /></label>
+      <details className="login-help"><summary>Local demo sign-in help</summary><p className="help">Use the configured manager password. Leave blank only if no password is configured.</p></details>
+      <ErrorMessage>{error}</ErrorMessage><button className="primary full" disabled={busy}>{busy ? 'Signing in…' : 'Open dashboard →'}</button>
+    </form><p className="help login-foot">Demo employee data · Messages are drafted, never sent</p></section></main>
 }
 
 function FacilityForm({ facility, onSaved, onCancel }) {
   const [values, setValues] = useState(facility || { name: '', latitude: '', longitude: '', timezone: 'America/Chicago', open_time: '08:00', close_time: '18:00', id: '' })
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
-  const fields = [ ['id', 'Location ID', 'number'], ['name', 'Facility name', 'text'],
-    ['latitude', 'Latitude', 'number'], ['longitude', 'Longitude', 'number'],
-    ['timezone', 'IANA timezone', 'text'], ['open_time', 'Opens (local)', 'time'], ['close_time', 'Closes (local)', 'time'] ]
+  const fields = [['name', 'Facility name', 'text'], ['id', 'Location ID', 'number'], ['latitude', 'Latitude', 'number'], ['longitude', 'Longitude', 'number'], ['timezone', 'Timezone', 'text'], ['open_time', 'Opens at', 'time'], ['close_time', 'Closes at', 'time']]
   async function submit(event) {
     event.preventDefault(); setBusy(true); setError('')
     const body = Object.fromEntries(fields.map(([key]) => [key, values[key]]))
@@ -100,16 +117,13 @@ function FacilityForm({ facility, onSaved, onCancel }) {
       onSaved()
     } catch (error) { setError(error.message) } finally { setBusy(false) }
   }
-  return <section className="card"><div className="section-head"><h2>{facility ? 'Edit facility' : 'Add facility'}</h2><button onClick={onCancel} disabled={busy}>Cancel</button></div>
-    <p className="muted">{facility ? 'Changing the location ID preserves staff and history. Configuration changes require a fresh evaluation.' : 'For this demo, your current employee sheet moves with you: the same employee IDs, names, emails, shifts and flags are reused at the new location. Run a fresh evaluation to filter recipients.'}</p>
-    <form onSubmit={submit}><div className="form-grid">{fields.map(([key, title, type]) => <label key={key}>{title}
-      <input type={type} value={values[key]} required={key !== 'id'}
-        min={key === 'id' ? 1 : key === 'latitude' ? -90 : key === 'longitude' ? -180 : undefined}
-        max={key === 'latitude' ? 90 : key === 'longitude' ? 180 : undefined}
-        step={['latitude', 'longitude'].includes(key) ? 'any' : undefined}
-        placeholder={key === 'id' ? 'Automatic if blank' : key === 'timezone' ? 'America/Chicago' : undefined}
-        onChange={e => setValues({ ...values, [key]: e.target.value })} />
-    </label>)}</div><ErrorMessage>{error}</ErrorMessage><button className="primary" disabled={busy}>{busy ? 'Saving…' : 'Save facility'}</button></form>
+  return <section className="card"><div className="section-head"><div><p className="eyebrow">LOCATION SETTINGS</p><h1>{facility ? 'Edit facility' : 'Add facility'}</h1></div><button onClick={onCancel} disabled={busy}>Cancel</button></div>
+    <p className="muted">{facility ? 'Save your changes, then check the forecast again.' : 'Your existing demo employee sheet moves to this facility.'}</p>
+    <form onSubmit={submit}><div className="form-grid">{fields.map(([key, title, type]) => <label key={key}>{title}<input type={type} value={values[key]} required={key !== 'id'}
+      min={key === 'id' ? 1 : key === 'latitude' ? -90 : key === 'longitude' ? -180 : undefined} max={key === 'latitude' ? 90 : key === 'longitude' ? 180 : undefined}
+      step={['latitude', 'longitude'].includes(key) ? 'any' : undefined} placeholder={key === 'id' ? 'Automatic if blank' : key === 'timezone' ? 'America/Chicago' : undefined}
+      onChange={event => setValues({ ...values, [key]: event.target.value })} /></label>)}</div>
+      <ErrorMessage>{error}</ErrorMessage><button className="primary" disabled={busy}>{busy ? 'Saving…' : 'Save facility'}</button></form>
   </section>
 }
 
@@ -122,7 +136,7 @@ function Dashboard() {
   const [alertsRefresh, setAlertsRefresh] = useState(0)
   const [week, setWeek] = useState(null)
   const [form, setForm] = useState(null)
-  const [busy, setBusy] = useState(false)
+  const [busy, setBusy] = useState('')
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   async function load() {
@@ -143,8 +157,7 @@ function Dashboard() {
     let checking = false
     async function checkAlerts() {
       if (checking) return
-      checking = true
-      setAlertsBusy(true)
+      checking = true; setAlertsBusy(true)
       try {
         const snapshot = await api(`/locations/${facility.id}/weather-alerts`)
         if (active) setAlertSnapshot(previous => snapshot.available ? snapshot : { ...snapshot, alerts: previous?.alerts || [] })
@@ -156,193 +169,253 @@ function Dashboard() {
     const timer = setInterval(checkAlerts, 60000)
     return () => { active = false; clearInterval(timer) }
   }, [facility?.id, facility?.latitude, facility?.longitude, alertsRefresh])
-  async function evaluate() {
-    setBusy(true); setError('')
+  async function evaluate(weekly) {
+    setBusy(weekly ? 'week' : 'today'); setError('')
     try {
-      const result = await api(`/locations/${facility.id}/evaluate`, { method: 'POST' })
-      if (result.state === 'INSUFFICIENT_DATA') setError(`INSUFFICIENT DATA — ${result.message} Last known recommendation was preserved.`)
+      const result = await api(`/locations/${facility.id}/${weekly ? 'evaluate-week' : 'evaluate'}`, { method: 'POST' })
+      if (result.state === 'INSUFFICIENT_DATA') {
+        setError(`${result.message}${week && weekly ? ' Showing the previous weekly check.' : ' Previous recommendations were preserved.'}`)
+        if (weekly && !week && result.days?.length) setWeek(result)
+      } else if (weekly) await load()
       else window.location.hash = `decision/${result.decision_id}`
-    } catch (error) { setError(error.message) } finally { setBusy(false) }
+    } catch (error) { setError(error.message) } finally { setBusy('') }
   }
-  async function evaluateWeek() {
-    setBusy(true); setError('')
-    try {
-      const result = await api(`/locations/${facility.id}/evaluate-week`, { method: 'POST' })
-      setWeek(result)
-      if (result.state === 'INSUFFICIENT_DATA') setError(result.message)
-      else await load()
-    } catch (error) { setError(error.message) } finally { setBusy(false) }
-  }
-  return <main className="container"><div className="page-head"><div><p className="eyebrow">OPERATIONS OVERVIEW</p><h1>Your facility</h1><p className="muted">A recommendation starts the conversation. You make the decision.</p></div>
-    <button onClick={() => setForm('add')} disabled={busy || loading}>+ Add facility</button></div>
-    <ErrorMessage>{error}</ErrorMessage>
-    {loading && <p role="status">Loading your facility…</p>}
-    {form && <FacilityForm key={form} facility={form === 'edit' ? facility : null} onCancel={() => setForm(null)} onSaved={() => { setForm(null); load() }} />}
-    {facility && <section className="card facility-card"><div className="section-head"><div><p className="eyebrow">LOCATION {facility.id}</p><h2>{facility.name}</h2></div>
-      <Badge tone={facility.last_checked_at ? facility.status.toLowerCase() : ''}>{facility.last_checked_at ? label(facility.status) : 'EVALUATION NEEDED'}</Badge></div>
-      <p className="muted">{facility.latitude}, {facility.longitude} · {facility.timezone}</p>
-      <p className="help">The status above is the latest agent recommendation. You decide the operational action and approve any message.</p>
-      <div className="facts"><div><span>Office hours</span><strong>{facility.open_time}–{facility.close_time}</strong></div>
-        <div><span>Last checked</span><strong>{when(facility.last_checked_at, facility.timezone)}</strong></div>
-        <div><span>Qualitative confidence</span><strong>{facility.status_confidence == null ? '—' : facility.status_confidence.toFixed(2)}</strong></div></div>
-      {facility.affected_start && <p className="impact">Impact window: {when(facility.affected_start, facility.timezone)} – {when(facility.affected_end, facility.timezone)} · {facility.timezone}</p>}
-      <p>{facility.status_reason || 'No live evaluation has been completed for this facility.'}</p>
-      {alertSnapshot ? <WeatherAlerts alerts={alertSnapshot.alerts} current available={alertSnapshot.available} fetchedAt={alertSnapshot.fetched_at}
-        error={alertSnapshot.error} sourceUrl={alertSnapshot.source_url} timezone={facility.timezone} onRefresh={() => setAlertsRefresh(value => value + 1)} refreshing={alertsBusy} /> : <p role="status">Checking current NWS alerts…</p>}
-      {latest && <a href={`#decision/${latest.id}`}>Review recommendation and choose an action →</a>}
-      <div className="actions"><button className="primary" disabled={busy} onClick={evaluateWeek}>{busy ? 'Evaluating live signals…' : 'Check next 7 days ↗'}</button>
-        <button disabled={busy} onClick={evaluate}>Evaluate today</button>
-        <button disabled={busy} onClick={() => setForm('edit')}>Edit location</button>
-        {history[0]?.manager_status === 'PENDING' && <Badge tone="pending">MANAGER REVIEW NEEDED</Badge>}</div>
-      <p className="help">The hourly engine advises only. Employee email delivery is disabled.</p>
-    </section>}
-    {week && <WeeklyPlan week={week} timezone={facility?.timezone} />}
-    <section className="card"><div className="section-head"><h2>Decision history</h2><button disabled={busy} onClick={load}>Refresh</button></div>
-      {!history.length ? <div className="empty"><strong>A clear record starts here.</strong><p>Run an evaluation to save the evidence, recommendation, and message draft.</p></div> :
-      <div className="history">{history.map(row => <a className="history-row" href={`#decision/${row.id}`} key={row.id}>
-        <div><strong>{label(row.posture)}</strong><span>{when(row.evaluated_at, facility?.timezone)}</span></div>
-        <Badge tone={row.manager_status.toLowerCase()}>{row.manager_status}</Badge><span aria-hidden="true">→</span>
-      </a>)}</div>}
+  if (form) return <main className="container narrow"><FacilityForm key={form} facility={form === 'edit' ? facility : null} onCancel={() => setForm(null)} onSaved={() => { setForm(null); load() }} /></main>
+  return <main className="container"><div className="page-head"><div><p className="eyebrow">YOUR FACILITY</p><h1>{facility?.name || 'Operations dashboard'}</h1>
+    <p className="muted">Plan the week. Prepare your team.</p></div><div className="inline-actions"><button disabled={Boolean(busy) || loading || !facility} onClick={() => setForm('edit')}>Edit location</button>
+      <button className="text-button" disabled={Boolean(busy) || loading} onClick={() => setForm('add')}>+ Add facility</button></div></div>
+    <ErrorMessage>{error}</ErrorMessage>{loading && <p role="status">Loading your facility…</p>}
+    {facility && <><section className="card overview-card"><div><p className="eyebrow">LATEST DAILY CHECK</p>
+      <Badge tone={facility.last_checked_at ? facility.status.toLowerCase() : 'pending'}>{facility.last_checked_at ? label(facility.status) : 'Check needed'}</Badge>
+      <p className="help">{facility.open_time}–{facility.close_time} · {facility.timezone} · {when(facility.last_checked_at, facility.timezone)}</p></div>
+      <div className="inline-actions"><button className="primary" disabled={Boolean(busy)} onClick={() => evaluate(true)}>{busy === 'week' ? 'Checking the week…' : 'Check next 7 days ↗'}</button>
+        <button disabled={Boolean(busy)} onClick={() => evaluate(false)}>{busy === 'today' ? 'Checking today…' : 'Evaluate today'}</button></div>
+      <details className="daily-summary"><summary>Daily recommendation & location details</summary><ReasonText text={facility.status_reason || 'Check the forecast to get a recommendation.'} />
+        <p className="help">Location {facility.id} · {facility.latitude}, {facility.longitude}</p>
+        {facility.affected_start && <p className="help">{when(facility.affected_start, facility.timezone)} – {when(facility.affected_end, facility.timezone)}</p>}
+        {latest && <a href={`#decision/${latest.id}`}>Review daily recommendation →</a>}</details>
+      {busy && <p className="evaluation-progress" role="status">Checking live weather and air quality, then matching shifts. This may take about a minute.</p>}
     </section>
+    {alertSnapshot ? <WeatherAlerts alerts={alertSnapshot.alerts} current available={alertSnapshot.available} fetchedAt={alertSnapshot.fetched_at} error={alertSnapshot.error}
+      sourceUrl={alertSnapshot.source_url} timezone={facility.timezone} onRefresh={() => setAlertsRefresh(value => value + 1)} refreshing={alertsBusy} /> : <p className="help" role="status">Checking current NWS alerts…</p>}
+    </>}
+    {week ? <WeeklyPlan key={week.evaluated_at || week.message} week={week} timezone={facility?.timezone} /> : !loading && <section className="card empty-plan"><span className="empty-symbol" aria-hidden="true">↗</span><h2>Start with the week ahead</h2>
+      <p>Check the forecast to see affected dates, shifts and message drafts.</p><div className="mini-flow"><span>1 · Check forecast</span><span>2 · Review shifts</span><span>3 · Prepare message</span></div></section>}
+    <details className="card history-panel"><summary>Past checks <span>{history.length} recent records</span></summary>
+      <div className="section-head"><p className="help">Saved recommendations and messages</p><button className="small-button" disabled={Boolean(busy)} onClick={load}>Refresh</button></div>
+      {!history.length ? <p className="muted">Your checks will appear here.</p> : history.map(row => <a className="history-row" href={`#decision/${row.id}`} key={row.id}><div><strong>{label(row.posture)}</strong><span>{when(row.evaluated_at, facility?.timezone)}</span></div><Badge tone={row.manager_status.toLowerCase()}>{label(row.manager_status)}</Badge><span aria-hidden="true">→</span></a>)}
+    </details>
   </main>
 }
 
 function WeeklyPlan({ week, timezone }) {
-  return <section className="card"><h2>Next seven days · date and shift review</h2>
-    <p>{week.message}</p>{week.evaluated_at && <p className="help">Checked {when(week.evaluated_at, timezone)}. Recheck for updated forecasts.</p>}
-    <p className="help">Each affected date, shift and impact window has its own recipient list and editable message. Missing coverage is shown explicitly. Future recommendations do not change today's status.</p>
-    {week.days.map(day => <article className="week-day" key={day.date}>
-      <div className="section-head"><h3>{new Intl.DateTimeFormat('en-US', { weekday: 'long', month: 'short', day: 'numeric', timeZone: 'UTC' }).format(new Date(`${day.date}T12:00:00Z`))}</h3>
-        <Badge tone={day.posture?.toLowerCase()}>{day.state === 'INSUFFICIENT_DATA' ? 'INSUFFICIENT DATA' : label(day.posture)}</Badge></div>
-      <p>{day.reason}</p>{day.warnings?.map((warning, index) => <p className="warning-text" key={index}>{warning}</p>)}
-      {day.message_groups?.map(group => <a className="history-row" key={group.decision_id} href={`#decision/${group.decision_id}`}>
-        <div><strong>{group.shift_name} · {label(group.posture)}</strong><span>{when(group.start, timezone)} – {when(group.end, timezone)}</span></div>
-        <span>{group.recipient_count} recipients · {group.manager_status || 'PENDING'} · review draft →</span></a>)}
-      {day.state === 'COMPLETED' && !day.message_groups?.length && <p className="help">No affected on-site shift recipients.
-        {day.decision_ids?.[0] && <> <a href={`#decision/${day.decision_ids[0]}`}>Review day / choose an action →</a></>}</p>}
-    </article>)}
+  const days = week.days || []
+  const preferred = days.find(day => day.message_groups?.some(group => group.manager_status === 'PENDING')) || days.find(day => day.posture && day.posture !== 'NORMAL') || days[0]
+  const [selected, setSelected] = useState(preferred?.date)
+  const day = days.find(item => item.date === selected) || days[0]
+  const groups = days.flatMap(item => item.message_groups || [])
+  const pending = groups.filter(item => item.manager_status === 'PENDING').length
+  const unavailable = days.filter(item => item.state === 'INSUFFICIENT_DATA').length
+  const mixedActions = new Set(day?.message_groups?.map(group => group.posture)).size > 1
+  return <section className="card week-plan"><div className="section-head"><div><p className="eyebrow">WEEK AHEAD</p><h2>Your week at a glance</h2></div>
+    <div className="inline-actions"><Badge tone={pending ? 'pending' : ''}>{pending ? `${pending} draft${pending === 1 ? '' : 's'} to review` : 'No pending shift drafts'}</Badge>{unavailable > 0 && <Badge tone="pending">{unavailable} day{unavailable === 1 ? '' : 's'} unavailable</Badge>}</div></div>
+    {week.evaluated_at && <p className="help">Checked {when(week.evaluated_at, timezone)} · Select a day below</p>}
+    <div className="week-strip" role="group" aria-label="Choose a forecast date">{days.map(item => <button key={item.date} className={`day-button ${item.date === day?.date ? 'selected' : ''}`} aria-pressed={item.date === day?.date} aria-label={calendarDate(item.date)} onClick={() => setSelected(item.date)}>
+      <span className="day-name">{calendarDate(item.date, true).split(',')[0]}</span><strong>{new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric', timeZone: 'UTC' }).format(new Date(`${item.date}T12:00:00Z`))}</strong>
+      <span className={`day-signal ${item.state === 'INSUFFICIENT_DATA' || item.warnings?.length ? 'attention' : item.message_groups?.length ? 'affected' : ''}`}>
+        {item.state === 'INSUFFICIENT_DATA' ? 'Unavailable' : item.message_groups?.length ? `${item.message_groups.length} shift draft${item.message_groups.length === 1 ? '' : 's'}` : item.warnings?.length ? 'Review notes' : item.posture !== 'NORMAL' ? 'Review day' : 'No change'}</span>
+    </button>)}</div>
+    {day ? <div className="selected-day" role="region" aria-labelledby="selected-day-title"><div className="section-head"><h3 id="selected-day-title">{calendarDate(day.date)}</h3><Badge tone={day.state === 'INSUFFICIENT_DATA' ? 'pending' : day.posture?.toLowerCase()}>{day.state === 'INSUFFICIENT_DATA' ? 'Forecast unavailable' : mixedActions ? 'Multiple shift actions' : label(day.posture)}</Badge></div>
+      <ReasonText key={day.date} text={day.reason} /><SourceNotes warnings={day.warnings} />
+      {day.message_groups?.map(group => <a className="shift-draft" key={group.decision_id} href={`#decision/${group.decision_id}`}><div><strong>{group.shift_name}</strong><span>{label(group.posture)} · {when(group.start, timezone, true)} – {when(group.end, timezone, true)} · {group.recipient_count} recipient{group.recipient_count === 1 ? '' : 's'}</span></div>
+        <Badge tone={group.manager_status?.toLowerCase()}>{label(group.manager_status || 'PENDING')}</Badge><span className="draft-cta">{group.manager_status === 'PENDING' ? 'Review draft' : 'Open message'} →</span></a>)}
+      {day.state === 'COMPLETED' && !day.message_groups?.length && <div className="day-empty"><span>No affected on-site shifts.</span>{day.decision_ids?.[0] && <a href={`#decision/${day.decision_ids[0]}`}>View day assessment →</a>}</div>}
+      {day.state === 'INSUFFICIENT_DATA' && <p className="help">No all-clear or employee draft is available for this date.</p>}
+    </div> : <p className="muted">{week.message}</p>}
   </section>
 }
 
-function EmployeeTable({ rows, onToggle, busy, scope }) {
-  return <div className="table-scroll"><table><thead><tr><th>Include</th><th>Employee</th><th>Shift</th><th>Flags</th><th>Selection reason</th></tr></thead>
-    <tbody>{rows.map(row => <tr key={row.emp_id} className={row.included ? '' : 'filtered'}><td><input type="checkbox" aria-label={`Include ${row.name}`}
-      checked={row.included} disabled={busy || (scope === 'affected' && ['not_scheduled', 'already_remote', 'invalid_shift', 'no_disruption'].includes(row.reason))}
-      onChange={e => onToggle(row.emp_id, e.target.checked)} /></td><td><strong>{row.name}</strong><small>{row.email}</small></td>
-      <td>{row.shift_name || 'No shift'}<small>{row.weekly_hours ? Object.entries(row.weekly_hours).filter(([, value]) => value).map(([day, hours]) => `${day} ${hours.join('–')}`).join(' · ') : 'No valid schedule'}</small></td>
-      <td>{row.is_manager ? <Badge>MANAGER</Badge> : null}{row.is_essential ? <Badge tone="pending">ESSENTIAL</Badge> : null}{row.is_teleworking ? <Badge>REMOTE</Badge> : null}</td>
-      <td>{label(row.reason)}{row.warning && <small className="warning-text">{row.warning}</small>}</td></tr>)}</tbody></table></div>
+function shiftHours(row, affectedStart, timezone) {
+  if (!affectedStart || !Number.isFinite(new Date(affectedStart).getTime())) return 'Schedule unavailable'
+  const key = new Intl.DateTimeFormat('en-US', { weekday: 'short', ...(timezone ? { timeZone: timezone } : {}) }).format(new Date(affectedStart)).toLowerCase()
+  const hours = row.weekly_hours?.[key]
+  return hours ? `${key} ${hours.join('–')}` : 'Not scheduled this day'
 }
 
-function DecisionDetails({ id }) {
+function EmployeeTable({ rows, onToggle, busy, scope, affectedStart, timezone }) {
+  return <div className="table-scroll"><table><thead><tr><th><span className="sr-only">Include</span></th><th>Employee</th><th>Affected shift</th><th>Selection</th></tr></thead><tbody>
+    {rows.map(row => <tr key={row.emp_id} className={row.included ? '' : 'filtered'}><td><input type="checkbox" aria-label={`Include ${row.name}`} checked={row.included}
+      disabled={busy || (scope === 'affected' && ['not_scheduled', 'already_remote', 'invalid_shift', 'no_disruption'].includes(row.reason))} onChange={event => onToggle(row.emp_id, event.target.checked)} /></td>
+      <td><strong>{row.name}</strong><small>{row.email}</small><div className="employee-flags">{row.is_essential && <Badge tone="pending">Essential</Badge>}{row.is_teleworking && <Badge>Remote</Badge>}{row.is_manager && <Badge>Manager</Badge>}</div></td>
+      <td>{row.shift_name || 'No shift'}<small>{shiftHours(row, affectedStart, timezone)}</small></td><td>{REASONS[row.reason] || label(row.reason)}</td></tr>)}
+  </tbody></table></div>
+}
+
+function RecipientStep({ rows, selection, busy, onPreview, onToggle, detail, timezone }) {
+  const [view, setView] = useState('included')
+  const included = rows.filter(row => row.included)
+  const visible = rows.filter(row => view === 'included' ? row.included : !row.included)
+  return <><div className="section-head"><div><p className="eyebrow">STEP 2 OF 3</p><h2>Who needs this message?</h2></div><button disabled={busy} className="small-button" onClick={() => onPreview(selection)}>Refresh staff</button></div>
+    <label>Audience<select disabled={busy} value={selection.scope} onChange={event => { setView('included'); onPreview({ scope: event.target.value, include_ids: [], exclude_ids: [] }) }}>
+      <option value="affected">Affected on-site employees</option><option value="all_staff">Everyone at this facility</option></select></label>
+    <p className="help">{selection.scope === 'affected' ? 'Matched to this date and time window. Remote and unscheduled staff are excluded.' : 'Includes remote and unscheduled staff. Select the manager explicitly if needed.'}</p>
+    <div className="segmented" role="group" aria-label="Recipient list"><button aria-pressed={view === 'included'} onClick={() => setView('included')}>Selected ({included.length})</button><button aria-pressed={view === 'excluded'} onClick={() => setView('excluded')}>Excluded ({rows.length - included.length})</button></div>
+    {included.some(row => row.requires_manager_review) && <p className="essential-note">Essential staff are selected. Confirm their instructions in the next step.</p>}
+    {visible.length ? <EmployeeTable rows={visible} busy={busy} scope={selection.scope} onToggle={onToggle} affectedStart={detail.affected_start} timezone={timezone} /> : <div className="small-empty">{view === 'included' ? 'No employees selected. Review excluded staff or change the audience.' : 'No excluded employees.'}</div>}
+  </>
+}
+
+function DecisionEvidence({ detail, timezone }) {
+  return <details className="disclosure"><summary>Evidence, confidence & policy</summary><p className="help">Confidence {detail.confidence.toFixed(2)} · qualitative estimate, not a probability. Actions follow the app's demo policy.</p>
+    <h3>Uncertainty</h3><p>{detail.alternatives.uncertainty || 'Requires manager review.'}</p><h3>What could change the recommendation</h3><ul>{detail.alternatives.what_would_change?.map((item, index) => <li key={index}>{item}</li>)}</ul>
+    <h3>Policy thresholds</h3><div className="table-scroll"><table><thead><tr><th>Rule</th><th>Trigger</th><th>Source value</th></tr></thead><tbody>{detail.thresholds.map((row, index) => <tr key={index}><td>{row.rule}<small>{row.policy_version}</small></td><td>{row.threshold}</td><td>{row.actual}<small>{row.margin}</small></td></tr>)}</tbody></table></div>
+    <h3>Source evidence</h3><div className="evidence-grid">{detail.evidence.map((row, index) => <article className="evidence" key={index}><a href={row.url} target="_blank" rel="noreferrer">{row.source} ↗</a><p className="help">{when(row.observed_at, timezone)}</p>
+      {row.value?.modeled && <Badge>Modeled AQI</Badge>}<details><summary>Source values</summary><pre>{JSON.stringify(row.value, null, 2)}</pre></details></article>)}</div>
+  </details>
+}
+
+function RiskStep({ detail, form, busy, onEdit, onPosture, timezone }) {
+  return <><p className="eyebrow">STEP 1 OF 3</p><h2>Review the risk</h2><ReasonText text={form.reason} /><SourceNotes warnings={detail.alternatives.warnings} />
+    <WeatherAlerts alerts={detail.alternatives.inputs?.weather?.alerts} timezone={timezone} />
+    <label>Your operational action<select disabled={busy} value={form.posture} onChange={event => onPosture(event.target.value)}>{POSTURES.map(value => <option key={value} value={value}>{label(value)}</option>)}</select></label>
+    <details className="disclosure"><summary>Edit the rationale</summary><label>Reason<textarea disabled={busy} rows="3" minLength="20" maxLength="3000" value={form.reason} onChange={event => onEdit('reason', event.target.value)} /></label></details>
+    <DecisionEvidence detail={detail} timezone={timezone} />
+  </>
+}
+
+function MessageStep({ detail, form, rows, busy, dirty, ready, essential, onEssential, onEdit, onSave, onDownload }) {
+  const selected = rows.filter(row => row.included)
+  const needsEssential = selected.some(row => row.requires_manager_review)
+  return <><p className="eyebrow">STEP 3 OF 3</p><div className="section-head"><h2>Prepare your message</h2><Badge>{selected.length} recipient{selected.length === 1 ? '' : 's'}</Badge></div>
+    <p className="help">{label(form.posture)} · Approval saves the draft. Email delivery is off.</p>
+    {form.posture !== detail.posture && <p className="essential-note">Your action changed. Update the message wording to match.</p>}
+    {!selected.length && <p className="essential-note">No recipients selected. This message will be saved without an audience.</p>}
+    <form onSubmit={event => { event.preventDefault(); onSave(event.nativeEvent.submitter?.value || 'PENDING') }}><fieldset disabled={busy || !ready}>
+      <label>Subject<input maxLength="240" required value={form.draft_subject} onChange={event => onEdit('draft_subject', event.target.value)} /></label>
+      <label>Message<textarea className="message-input" rows="9" maxLength="20000" required value={form.draft_body} onChange={event => onEdit('draft_body', event.target.value)} /></label>
+      {needsEssential && <label className="check-notice"><input type="checkbox" checked={essential} onChange={event => onEssential(event.target.checked)} />I have confirmed instructions for the selected essential staff.</label>}
+      <div className="message-actions"><button className="primary" type="submit" value="APPROVED" disabled={needsEssential && !essential}>Approve draft</button><button type="submit" value="PENDING">Save draft</button>
+        <button type="button" disabled={dirty} onClick={onDownload}>Download saved message ↓</button><button className="text-button danger" type="submit" value="REJECTED">Reject</button></div>
+    </fieldset></form><p className="help" role="status">{dirty ? 'Unsaved changes · save before downloading.' : `Saved · ${label(detail.manager_status)}`}</p>
+  </>
+}
+
+function ReviewHistory({ detail, timezone }) {
+  const original = detail.alternatives.original_recommendation
+  return <details className="card history-panel"><summary>Decision record <span>#{detail.id}</span></summary>
+    <p className="help">Checked {when(detail.evaluated_at, timezone)}{detail.reviewed_at && ` · Reviewed ${when(detail.reviewed_at, timezone)} by manager ${detail.reviewed_by}`}</p>
+    {original && <details className="disclosure"><summary>Original recommendation · {label(original.posture)}</summary><p>{original.reason}</p></details>}
+    {detail.alternatives.reviews?.length ? detail.alternatives.reviews.map((review, index) => <details className="disclosure" key={index}><summary>{label(review.status)} · {when(review.reviewed_at, timezone)}</summary><p>{review.reason}</p><strong>{review.draft_subject}</strong><p className="alert-description">{review.draft_body}</p></details>) : <p className="help">No manager review yet.</p>}
+  </details>
+}
+
+function DecisionDetails({ id, onDirtyChange, onNavigate }) {
   const [detail, setDetail] = useState(null)
   const [form, setForm] = useState(null)
   const [rows, setRows] = useState([])
-  const [selection, setSelection] = useState({ scope: 'affected', include_ids: [], exclude_ids: [] })
+  const [selection, setSelection] = useState(audienceDefault)
   const [essential, setEssential] = useState(false)
   const [dirty, setDirty] = useState(false)
+  const [ready, setReady] = useState(true)
   const [busy, setBusy] = useState(false)
+  const [step, setStep] = useState(0)
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
+  const stepPanel = useRef(null)
   function apply(value) {
     setDetail(value); setRows(value.recipients)
     setForm({ posture: value.posture, reason: value.reason, draft_subject: value.draft_subject, draft_body: value.draft_body })
-    setSelection(value.alternatives.recipient_selection || { scope: 'affected', include_ids: [], exclude_ids: [] })
-    setEssential(false); setDirty(false)
+    setSelection(value.alternatives.recipient_selection || audienceDefault())
+    setEssential(false); setDirty(false); setReady(true)
   }
   useEffect(() => {
     let active = true
-    api(`/decisions/${id}`).then(value => { if (active) apply(value) }).catch(error => { if (active) setError(error.message) })
+    api(`/decisions/${id}`).then(value => { if (active) { apply(value); setStep(value.manager_status === 'PENDING' ? 0 : 2) } }).catch(error => { if (active) setError(error.message) })
     return () => { active = false }
   }, [id])
+  useEffect(() => { onDirtyChange(dirty); return () => onDirtyChange(false) }, [dirty, onDirtyChange])
+  useEffect(() => { stepPanel.current?.focus() }, [step, detail?.id])
   async function preview(next, posture = form.posture) {
-    setBusy(true); setError(''); setNotice('')
+    setBusy(true); setReady(false); setError(''); setNotice('')
     try {
       const result = await api(`/decisions/${id}/recipients`, { method: 'POST', body: { ...next, posture } })
-      setRows(result); setSelection(next); setDirty(true); setEssential(false)
+      if (recipientState(result) !== recipientState(rows) || JSON.stringify(next) !== JSON.stringify(selection)) setDirty(true)
+      setRows(result); setSelection(next); setEssential(false); setReady(true)
     } catch (error) { setError(error.message) } finally { setBusy(false) }
   }
   function toggle(empId, included) {
-    preview({ ...selection,
-      include_ids: included ? [...new Set([...selection.include_ids, empId])] : selection.include_ids.filter(id => id !== empId),
-      exclude_ids: included ? selection.exclude_ids.filter(id => id !== empId) : [...new Set([...selection.exclude_ids, empId])],
-    })
+    preview({ ...selection, include_ids: included ? [...new Set([...selection.include_ids, empId])] : selection.include_ids.filter(value => value !== empId),
+      exclude_ids: included ? selection.exclude_ids.filter(value => value !== empId) : [...new Set([...selection.exclude_ids, empId])] })
   }
   function edit(key, value) { setForm(current => ({ ...current, [key]: value })); setDirty(true); setNotice('') }
+  function changeStep(next) { setStep(next); if (next > 0) preview(selection) }
   async function save(status) {
+    if (form.reason.trim().length < 20) { setError('Add a rationale of at least 20 characters in the Risk step.'); setStep(0); return }
+    if (!ready) return
     setBusy(true); setError(''); setNotice('')
     try {
       const result = await api(`/decisions/${id}/review`, { method: 'POST', body: { ...form, ...selection, status, essential_confirmed: essential } })
-      apply(result); setNotice(`${status === 'PENDING' ? 'Draft saved' : label(status)}. No emails were sent.`)
+      apply(result); setNotice(status === 'PENDING' ? 'Draft saved.' : status === 'APPROVED' ? 'Draft approved. Ready to download.' : 'Draft rejected.')
     } catch (error) { setError(error.message) } finally { setBusy(false) }
   }
   function download() {
-    const blob = new Blob([`Subject: ${detail.draft_subject}\n\n${detail.draft_body}`], { type: 'text/plain;charset=utf-8' })
+    const recipients = detail.recipients.filter(row => row.included).map(row => row.email)
+    const blob = new Blob([`${recipients.length ? `To: ${recipients.join(', ')}\n` : ''}Subject: ${detail.draft_subject}\n\n${detail.draft_body}`], { type: 'text/plain;charset=utf-8' })
     const url = URL.createObjectURL(blob)
     const link = document.createElement('a'); link.href = url; link.download = `decision-${id}-${detail.manager_status.toLowerCase()}.txt`; link.click()
     setTimeout(() => URL.revokeObjectURL(url), 1000)
   }
-  if (!detail) return <main className="container"><a href="#">← Facilities</a><ErrorMessage>{error}</ErrorMessage><p role="status">{error ? 'Decision could not be loaded.' : 'Loading decision…'}</p></main>
+  if (!detail) return <main className="container"><a className="back" href="#" onClick={onNavigate}>← Week plan</a><ErrorMessage>{error}</ErrorMessage><p role="status">{error ? 'Could not load this decision.' : 'Loading draft…'}</p></main>
   const zone = detail.alternatives.facility_snapshot?.timezone
-  const included = rows.filter(row => row.included)
-  const needsEssential = included.some(row => row.requires_manager_review)
-  return <main className="container"><a className="back" href="#">← Back to facilities</a>
-    <div className="page-head"><div><p className="eyebrow">DECISION {detail.id} · {when(detail.evaluated_at, zone)}</p><h1>{label(detail.posture)}</h1><p className="muted">{detail.manager_status === 'PENDING' ? 'Recommendation only — awaiting your decision. ' : `${detail.manager_status} by manager. `}{detail.alternatives.facility_snapshot?.name || `Facility ${detail.location_id}`} · {when(detail.affected_start, zone)} – {when(detail.affected_end, zone)} {zone}</p></div>
-      <Badge tone={detail.manager_status.toLowerCase()}>{detail.manager_status}</Badge></div>
+  const group = detail.alternatives.message_group
+  return <main className="container review-container"><a className="back" href="#" onClick={onNavigate}>← Week plan</a>
+    <div className="page-head"><div><p className="eyebrow">{detail.alternatives.facility_snapshot?.name || `Facility ${detail.location_id}`}</p><h1>{group?.shift_name || 'Daily assessment'}</h1>
+      <p className="muted">{when(detail.affected_start, zone)} – {when(detail.affected_end, zone, true)}</p></div><Badge tone={detail.manager_status.toLowerCase()}>{label(detail.manager_status)}</Badge></div>
+    <nav className="review-steps" aria-label="Message review steps">{['Risk', 'Recipients', 'Message'].map((name, index) => <button key={name} disabled={busy} aria-current={step === index ? 'step' : undefined} onClick={() => changeStep(index)}><span>{index + 1}</span>{name}</button>)}</nav>
     <ErrorMessage>{error}</ErrorMessage>{notice && <div className="notice success" role="status">{notice}</div>}
-    {detail.alternatives.message_group?.shift_name && <div className="notice" role="status">This draft applies to {detail.alternatives.message_group.shift_name} on {detail.alternatives.message_group.date}. Affected-staff previews stay within this shift; facility-wide scope explicitly widens the audience.</div>}
-    <WeatherAlerts alerts={detail.alternatives.inputs?.weather?.alerts} timezone={zone} />
-    <section className="card"><div className="section-head"><h2>Why this recommendation</h2><Badge>{detail.confidence.toFixed(2)} QUALITATIVE CONFIDENCE</Badge></div>
-      <p>{detail.reason}</p><p className="help">Qualitative estimate, not a statistically calibrated probability. All posture actions are app-defined demo policy.</p>
-      <div className="two-column"><div><h3>Uncertainty</h3><p>{detail.alternatives.uncertainty || 'Requires manager review.'}</p>
-        {detail.alternatives.warnings?.map((warning, index) => <p className="warning-text" key={index}>{warning}</p>)}</div>
-        <div><h3>What would change this</h3><ul>{detail.alternatives.what_would_change?.map((item, index) => <li key={index}>{item}</li>)}</ul></div></div>
-      <h3>Policy thresholds</h3><div className="table-scroll"><table><thead><tr><th>Rule</th><th>Threshold</th><th>Actual / margin</th></tr></thead><tbody>{detail.thresholds.map((row, index) => <tr key={index}>
-        <td>{row.rule}<small>{row.policy_version} · {row.kind}</small></td><td>{row.threshold}</td><td>{row.actual}<small>{row.margin}</small></td></tr>)}</tbody></table></div>
-      <h3>Source evidence</h3><div className="evidence-grid">{detail.evidence.map((row, index) => <article className="evidence" key={index}>
-        <a href={row.url} target="_blank" rel="noreferrer">{row.source} ↗</a><p className="help">Observed / forecast for {when(row.observed_at, zone)}</p>
-        {row.value?.modeled && <Badge>MODELED · NOT A SENSOR READING</Badge>}
-        <details><summary>View source values</summary><pre>{JSON.stringify(row.value, null, 2)}</pre></details></article>)}</div>
-    </section>
-    <section className="card"><div className="section-head"><div><h2>Employee selection</h2><p className="muted">{included.length} included · {rows.length - included.length} filtered · current preview shown after refresh</p></div>
-      <button disabled={busy} onClick={() => preview(selection)}>Refresh current staff</button></div>
-      <label className="scope">Message audience<select value={selection.scope} disabled={busy} onChange={e => preview({ scope: e.target.value, include_ids: [], exclude_ids: [] })}>
-        <option value="affected">Affected on-site staff · schedule matched</option><option value="all_staff">Facility-wide · includes remote and unscheduled staff</option></select></label>
-      <p className="help">Commute notices exclude remote and unscheduled staff. Choose facility-wide for wider safety messages. Managers are excluded unless selected.</p>
-      <EmployeeTable rows={rows} onToggle={toggle} busy={busy} scope={selection.scope} />
-    </section>
-    <section className="card"><p className="eyebrow">MANAGER REVIEW</p><h2>Prepare the message</h2><p className="muted">Edit the recommendation and text. Approval prepares your message; email delivery is disabled.</p>
-      <form onSubmit={e => { e.preventDefault(); save('PENDING') }}><fieldset disabled={busy}>
-        <label>Manager posture<select value={form.posture} onChange={e => { const posture = e.target.value; edit('posture', posture); preview({ scope: selection.scope, include_ids: [], exclude_ids: [] }, posture) }}>{POSTURES.map(value => <option key={value} value={value}>{label(value)}</option>)}</select></label>
-        <label>Reason<textarea rows="3" minLength="20" maxLength="3000" required value={form.reason} onChange={e => edit('reason', e.target.value)} /></label>
-        <label>Subject<input maxLength="240" required value={form.draft_subject} onChange={e => edit('draft_subject', e.target.value)} /></label>
-        <label>Message<textarea className="message-input" rows="11" maxLength="20000" required value={form.draft_body} onChange={e => edit('draft_body', e.target.value)} /></label>
-        {needsEssential && <label className="check-notice"><input type="checkbox" checked={essential} onChange={e => setEssential(e.target.checked)} />I have confirmed specific instructions for the included essential personnel.</label>}
-        <div className="actions"><button className="primary" type="button" disabled={busy || (needsEssential && !essential)} onClick={() => save('APPROVED')}>Approve message</button>
-          <button type="submit">Save draft</button><button className="danger" type="button" onClick={() => save('REJECTED')}>Reject</button>
-          <button type="button" disabled={busy || dirty} onClick={download}>Download saved message ↓</button></div>
-      </fieldset></form><p className="help">{dirty ? 'You have unsaved changes. Save or approve before downloading.' : `Saved as ${detail.manager_status}. No manager or employee email has been sent.`}</p>
-    </section>
-    <section className="card"><h2>Decision record</h2><p>Reviewed by: {detail.reviewed_by || 'Awaiting manager'} · {detail.reviewed_at ? when(detail.reviewed_at, zone) : 'Pending'}</p>
-      <p>Manager alert: {detail.alternatives.material_change ? 'New or changed alert/recommendation/window — review needed in app.' : 'No material change since the previous evaluation. Source alerts remain visible.'} Email delivery disabled.</p>
-      <details><summary>Original inputs, recommendation and review history</summary><pre>{JSON.stringify(detail.alternatives, null, 2)}</pre></details>
-    </section>
+    <section className="card review-panel" ref={stepPanel} tabIndex={-1} aria-busy={busy} aria-label={`${['Risk', 'Recipients', 'Message'][step]} review`}>
+      {step === 0 && <RiskStep detail={detail} form={form} busy={busy} onEdit={edit} timezone={zone} onPosture={posture => { edit('posture', posture); preview({ scope: selection.scope, include_ids: [], exclude_ids: [] }, posture) }} />}
+      {step === 1 && <RecipientStep rows={rows} selection={selection} busy={busy} detail={detail} timezone={zone} onPreview={preview} onToggle={toggle} />}
+      {step === 2 && <MessageStep detail={detail} form={form} rows={rows} busy={busy} dirty={dirty} ready={ready} essential={essential} onEssential={setEssential} onEdit={edit} onSave={save} onDownload={download} />}
+      <div className="step-actions">{step > 0 ? <button disabled={busy} onClick={() => changeStep(step - 1)}>← {step === 1 ? 'Risk' : 'Recipients'}</button> : <span className="help">You choose the final action.</span>}
+        {step < 2 && <button className="primary" disabled={busy || !ready} onClick={() => changeStep(step + 1)}>{busy ? 'Updating recipients…' : `Continue to ${step === 0 ? 'recipients' : 'message'} →`}</button>}</div>
+    </section><ReviewHistory detail={detail} timezone={zone} />
   </main>
 }
 
 export default function App() {
   const [loggedIn, setLoggedIn] = useState(Boolean(sessionStorage.getItem('facility_token')))
   const [decisionId, setDecisionId] = useState(decisionFromHash())
-  function logout() { sessionStorage.removeItem('facility_token'); sessionStorage.removeItem('facility_manager'); setLoggedIn(false); window.location.hash = '' }
+  const [dirty, setDirty] = useState(false)
+  const dirtyRef = useRef(false)
+  const currentHash = useRef(window.location.hash)
+  const onDirtyChange = useCallback(value => { dirtyRef.current = value; setDirty(value) }, [])
+  function canLeave() {
+    if (dirtyRef.current && !window.confirm('Discard your unsaved draft changes?')) return false
+    dirtyRef.current = false
+    return true
+  }
+  function onNavigate(event) { if (!canLeave()) event.preventDefault() }
+  function logout() { if (!canLeave()) return; sessionStorage.removeItem('facility_token'); sessionStorage.removeItem('facility_manager'); setDirty(false); setLoggedIn(false); window.location.hash = '' }
   useEffect(() => {
-    const navigate = () => setDecisionId(decisionFromHash())
-    window.addEventListener('hashchange', navigate); window.addEventListener('session-expired', logout)
-    return () => { window.removeEventListener('hashchange', navigate); window.removeEventListener('session-expired', logout) }
+    const navigate = () => {
+      if (!canLeave()) { window.history.replaceState(null, '', currentHash.current || '#'); return }
+      currentHash.current = window.location.hash
+      setDirty(false); setDecisionId(decisionFromHash()); window.scrollTo({ top: 0 })
+    }
+    const expired = () => { sessionStorage.removeItem('facility_token'); sessionStorage.removeItem('facility_manager'); dirtyRef.current = false; setDirty(false); setLoggedIn(false); window.location.hash = '' }
+    window.addEventListener('hashchange', navigate); window.addEventListener('session-expired', expired)
+    return () => { window.removeEventListener('hashchange', navigate); window.removeEventListener('session-expired', expired) }
   }, [])
+  useEffect(() => {
+    if (!dirty) return
+    const warn = event => { event.preventDefault(); event.returnValue = '' }
+    window.addEventListener('beforeunload', warn)
+    return () => window.removeEventListener('beforeunload', warn)
+  }, [dirty])
   if (!loggedIn) return <Login onLogin={() => setLoggedIn(true)} />
-  return <><header className="app-header"><a className="brand" href="#"><span className="brand-mark">F</span>Facility Operations <span className="brand-ai">AI</span></a>
-    <div><span className="manager-name">{sessionStorage.getItem('facility_manager')}</span><button onClick={logout}>Sign out</button></div></header>
-    <div className="safety-strip">MANAGER IN THE LOOP <span>Live evidence. Human approval. Email delivery disabled.</span></div>
-    {decisionId ? <DecisionDetails key={decisionId} id={decisionId} /> : <Dashboard />}
-    <footer>Facility Operations AI · Hackathon MVP · Not an emergency warning system</footer></>
+  return <><header className="app-header"><a className="brand" href="#" onClick={onNavigate}><span className="brand-mark">F</span>Facility Operations</a>
+    <div className="inline-actions"><span className="draft-mode">Drafts only · email off</span><span className="manager-name">{sessionStorage.getItem('facility_manager')}</span><button className="small-button" onClick={logout}>Sign out</button></div></header>
+    {decisionId ? <DecisionDetails key={decisionId} id={decisionId} onDirtyChange={onDirtyChange} onNavigate={onNavigate} /> : <Dashboard />}
+    <footer>Manager-reviewed recommendations · Demo policy · Not an emergency warning service</footer></>
 }
