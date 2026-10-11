@@ -23,6 +23,8 @@ and [sender verification requirements](https://www.twilio.com/docs/sendgrid/for-
 
 ```dotenv
 EMAIL_ENABLED=false
+MANAGER_ALERTS_ENABLED=false
+APP_BASE_URL=http://localhost:8080
 EMAIL_PROVIDER=sendgrid
 SENDGRID_API_KEY=
 EMAIL_FROM=YOUR_VERIFIED_SENDER
@@ -30,11 +32,12 @@ DEMO_EMAIL_TO=
 ```
 
 Keep delivery disabled until the key and sender are configured. To activate
-later, set `EMAIL_ENABLED=true`, rebuild the API image for the new SDK, and
+later, set `EMAIL_ENABLED=true` and `MANAGER_ALERTS_ENABLED=true`, and set
+`APP_BASE_URL` to the public dashboard URL on Akamai. Rebuild the images and
 recreate the services:
 
 ```sh
-docker compose build api
+docker compose build api web
 docker compose up -d --wait
 docker compose exec -T web nginx -s reload
 ```
@@ -45,8 +48,30 @@ The persistent database volume is preserved; do not rerun the baseline seed.
 
 ## How sending works
 
-The judging frontend still provides preparation, approval and download only.
-It does not expose email controls. The authenticated backend already has:
+Daily manual and three-hour scheduled checks compare the saved facility status
+with the validated recommendation. Only **NORMAL → DELAYED_OPENING /
+EARLY_DISMISSAL / TELEWORK / CLOSED** automatically sends a manager review email.
+Repeated checks with the same status and returns to NORMAL do not. Weekly
+planning saves future drafts without changing current status or sending email.
+
+Manager email goes to the current managers assigned in `users`, independent of
+the optional employee demo redirect. It includes their names, login IDs and email
+addresses, facility, affected local times, rationale and a direct decision link.
+The dashboard shows the exact template under **Risk → Manager review email**
+and the signed-in account email in the header. Claim/result metadata lives in
+`decisions.alternatives_json.manager_alert`, and acceptance time in
+`manager_alert_sent_at`; employee delivery fields stay untouched. Claims are
+committed before the HTTPS request, and provider errors cannot undo the saved
+recommendation. A failed or uncertain manager submission is visible in the
+dashboard; there are no blind automatic retries.
+
+The manager may leave the decision pending, reject it, or review staff and approve
+a message. **Approve and send email** first saves the approval and then submits
+the message, with employee addresses rechecked at send time. Save draft and
+Reject never send. Previously approved unsent messages have a send button too.
+The backend review endpoint itself only records approval; the combined dashboard
+action explicitly calls the send endpoint afterward, and stops if review fails.
+The authenticated backend has:
 
 - `GET /api/email-status`: configuration readiness, without an API call or
   disclosure of the key. This does not verify account access or sender identity.

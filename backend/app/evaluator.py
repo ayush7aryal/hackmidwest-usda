@@ -14,6 +14,7 @@ from app import agent, tools
 from app.db import connect, utc_now
 from app.drafts import prepare_message
 from app.models import Recommendation
+from app.manager_alerts import notify_manager
 from app.notification_rules import notification_rule, suppress_recipients
 from app.recipients import select_recipients
 from app.thresholds import policy_context, timestamp
@@ -100,8 +101,14 @@ def run_evaluation(db: sqlite3.Connection, location: dict) -> dict:
     result = agent.validate_recommendation(agent.recommend(location, context), context)
     with db:
         decision_id = save_decision(db, location, result, signals, context, update_location=True)
+    alert = notify_manager(db, decision_id)
+    message = 'Recommendation saved for manager review. No employee emails were sent.'
+    if alert['status'] == 'ACCEPTED':
+        message += ' Manager review email accepted by the email provider.'
+    elif alert['status'] in ('FAILED', 'UNKNOWN', 'PARTIAL'):
+        message += ' Manager email needs attention; see its status in the decision.'
     return {"state": "COMPLETED", "decision_id": decision_id,
-            "message": "Recommendation saved for manager review. No notifications were sent."}
+            "message": message}
 
 
 def save_decision(db: sqlite3.Connection, location: dict, result: Recommendation, signals: dict,

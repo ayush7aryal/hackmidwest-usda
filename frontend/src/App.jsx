@@ -95,10 +95,10 @@ function Login({ onLogin }) {
     <div className="login-flow"><span>01 Check the week</span><span>02 Review your team</span><span>03 Prepare a message</span></div>
   </section><section className="card login-card"><p className="eyebrow">MANAGER ACCESS</p><h2>Welcome back</h2>
     <form onSubmit={submit}><label>Manager account<select value={employee} onChange={event => setEmployee(event.target.value)}>
-      <option value="1001">Alex Morgan</option><option value="2001">Jordan Lee</option>
-      <option value="51001">Maya Patel · Panama City Beach</option><option value="52001">Daniel Brooks · Jacksonville</option>
-      <option value="53001">Sofia Ramirez · Charleston</option><option value="54001">Ethan Chen · Savannah</option>
-      <option value="55001">Olivia Bennett · Tampa</option></select></label>
+      <option value="1001">Alex Morgan · 1001</option><option value="2001">Jordan Lee · 2001</option>
+      <option value="51001">Maya Patel · 51001 · Panama City Beach</option><option value="52001">Daniel Brooks · 52001 · Jacksonville</option>
+      <option value="53001">Sofia Ramirez · 53001 · Charleston</option><option value="54001">Ethan Chen · 54001 · Savannah</option>
+      <option value="55001">Olivia Bennett · 55001 · Tampa</option></select></label>
       <label>Password<input type="password" autoComplete="current-password" value={password} onChange={event => setPassword(event.target.value)} placeholder="Manager password" /></label>
       <details className="login-help"><summary>Local demo sign-in help</summary><p className="help">Use the configured manager password. Leave blank only if no password is configured.</p></details>
       <ErrorMessage>{error}</ErrorMessage><button className="primary full" disabled={busy}>{busy ? 'Signing in…' : 'Open dashboard →'}</button>
@@ -216,6 +216,7 @@ function Dashboard() {
         {latest && <a href={`#decision/${latest.id}`}>Review daily recommendation →</a>}</details>
       {busy && <EvaluationLoader weekly={busy === 'week'} />}
     </section>
+    {['FAILED', 'UNKNOWN', 'PARTIAL'].includes(latest?.alternatives.manager_alert?.status) && <p className="essential-note" role="status">The manager review email needs attention. <a href={`#decision/${latest.id}`}>Review the saved decision →</a></p>}
     {alertSnapshot ? <WeatherAlerts alerts={alertSnapshot.alerts} current available={alertSnapshot.available} fetchedAt={alertSnapshot.fetched_at} error={alertSnapshot.error}
       sourceUrl={alertSnapshot.source_url} timezone={facility.timezone} onRefresh={() => setAlertsRefresh(value => value + 1)} refreshing={alertsBusy} /> : <p className="help" role="status">Checking current NWS alerts…</p>}
     </>}
@@ -295,30 +296,38 @@ function DecisionEvidence({ detail, timezone }) {
 }
 
 function RiskStep({ detail, form, busy, onEdit, onPosture, timezone }) {
+  const alert = detail.alternatives.manager_alert
   return <><p className="eyebrow">STEP 1 OF 3</p><h2>Review the risk</h2><ReasonText text={form.reason} /><SourceNotes warnings={detail.alternatives.warnings} />
     <WeatherAlerts alerts={detail.alternatives.inputs?.weather?.alerts} timezone={timezone} />
     <div className="operational-action"><label>Your operational action<select disabled={busy} value={form.posture} onChange={event => onPosture(event.target.value)}>{POSTURES.map(value => <option key={value} value={value}>{label(value)}</option>)}</select></label><p className="help">Choose the action for this affected window. Employee selection follows your choice.</p></div>
     <details className="disclosure"><summary>Edit the rationale</summary><label>Reason<textarea disabled={busy} rows="3" minLength="20" maxLength="3000" value={form.reason} onChange={event => onEdit('reason', event.target.value)} /></label></details>
+    {alert?.template && <details className="disclosure manager-review-email"><summary>Manager review email · {alert.status === 'ACCEPTED' ? 'Submitted' : label(alert.status)}</summary>
+      <p><strong>To:</strong> {alert.template.to.join(', ')}</p><p><strong>Subject:</strong> {alert.template.subject}</p>
+      <p className="alert-description">{alert.template.body}</p></details>}
+    {['FAILED', 'UNKNOWN', 'PARTIAL'].includes(alert?.status) && <p className="essential-note" role="status">Manager email {label(alert.status).toLowerCase()}. Review this decision here; employee messages have not been sent automatically.</p>}
     <DecisionEvidence detail={detail} timezone={timezone} />
   </>
 }
 
-function MessageStep({ detail, form, rows, busy, dirty, ready, essential, onEssential, onEdit, onSave, onDownload }) {
+function MessageStep({ detail, form, rows, busy, dirty, ready, essential, email, onEssential, onEdit, onSave, onDownload, onSend }) {
   const selected = rows.filter(row => row.included)
   const needsEssential = selected.some(row => row.requires_manager_review)
   const submitted = detail.sent_at || ['IN_PROGRESS', 'UNKNOWN', 'PARTIAL', 'ACCEPTED'].includes(detail.delivery?.status)
   return <><p className="eyebrow">STEP 3 OF 3</p><div className="section-head"><h2>Prepare your message</h2><Badge>{selected.length} recipient{selected.length === 1 ? '' : 's'}</Badge></div>
-    <p className="help">Review the wording, approve your message and download it.</p>
+    <p className="help">Review the message, then approve and send it to the selected affected employees.</p>
     {form.posture !== detail.posture && <p className="essential-note">Your action changed. Update the message wording to match.</p>}
     {!selected.length && <p className="essential-note">No recipients selected. Change the action in Risk to recalculate affected staff.</p>}
     <form onSubmit={event => { event.preventDefault(); onSave(event.nativeEvent.submitter?.value || 'PENDING') }}><fieldset disabled={busy || !ready || submitted}>
       <label>Subject<input maxLength="240" required value={form.draft_subject} onChange={event => onEdit('draft_subject', event.target.value)} /></label>
       <label>Message<textarea className="message-input" rows="9" maxLength="20000" required value={form.draft_body} onChange={event => onEdit('draft_body', event.target.value)} /></label>
       {needsEssential && <label className="check-notice"><input type="checkbox" checked={essential} onChange={event => onEssential(event.target.checked)} />I have confirmed instructions for the selected essential staff.</label>}
-      <div className="message-actions"><button className="primary" type="submit" value="APPROVED" disabled={needsEssential && !essential}>Approve message</button><button type="submit" value="PENDING">Save draft</button>
+      <div className="message-actions"><button className="primary" type="submit" value="APPROVED" disabled={!email?.ready || !selected.length || (needsEssential && !essential)}>{busy ? 'Approving and sending…' : 'Approve and send email'}</button><button type="submit" value="PENDING">Save draft</button>
         <button className="text-button danger" type="submit" value="REJECTED">Reject</button></div>
     </fieldset></form>
-    <div className="message-actions"><button disabled={busy || dirty} onClick={onDownload}>Download saved message ↓</button></div>
+    <div className="message-actions">{detail.manager_status === 'APPROVED' && <button className="primary" disabled={busy || dirty || !ready || !email?.ready || !selected.length || Boolean(submitted)} onClick={onSend}>{busy ? 'Working…' : 'Send employee emails'}</button>}
+      <button disabled={busy || dirty} onClick={onDownload}>Download saved message ↓</button></div>
+    {email && !email.ready && <p className="help">Email sending is unavailable. You can save or download the message.</p>}
+    {detail.delivery?.status && <p className="help" role="status">Employee email: {detail.delivery.status === 'ACCEPTED' ? 'Accepted by provider for delivery.' : label(detail.delivery.status)}{['UNKNOWN', 'PARTIAL', 'IN_PROGRESS'].includes(detail.delivery.status) && ' · Check provider activity before any further action.'}</p>}
     <p className="help" role="status">{dirty ? 'Unsaved changes · save before downloading.' : `Saved · ${label(detail.manager_status)}`}</p>
   </>
 }
@@ -344,6 +353,7 @@ function DecisionDetails({ id, onDirtyChange, onNavigate }) {
   const [step, setStep] = useState(0)
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
+  const [email, setEmail] = useState(null)
   const stepPanel = useRef(null)
   function apply(value) {
     setDetail(value); setRows(value.recipients)
@@ -354,6 +364,7 @@ function DecisionDetails({ id, onDirtyChange, onNavigate }) {
   useEffect(() => {
     let active = true
     api(`/decisions/${id}`).then(value => { if (active) { apply(value); setStep(value.manager_status === 'PENDING' ? 0 : 2) } }).catch(error => { if (active) setError(error.message) })
+    api('/email-status').then(value => { if (active) setEmail(value) }).catch(() => { if (active) setEmail({ ready: false }) })
     return () => { active = false }
   }, [id])
   useEffect(() => { onDirtyChange(dirty); return () => onDirtyChange(false) }, [dirty, onDirtyChange])
@@ -383,11 +394,36 @@ function DecisionDetails({ id, onDirtyChange, onNavigate }) {
   async function save(status) {
     if (form.reason.trim().length < 20) { setError('Add a rationale of at least 20 characters in the Risk step.'); setStep(0); return }
     if (!ready) return
+    let reviewed = false
     setBusy(true); setError(''); setNotice('')
     try {
       const result = await api(`/decisions/${id}/review`, { method: 'POST', body: { ...form, ...selection, status, essential_confirmed: essential } })
-      apply(result); setNotice(status === 'PENDING' ? 'Draft saved.' : status === 'APPROVED' ? 'Message ready to download.' : 'Draft rejected.')
-    } catch (error) { setError(error.message) } finally { setBusy(false) }
+      reviewed = true
+      apply(result)
+      if (status === 'APPROVED') await submitEmployeeEmails()
+      else setNotice(status === 'PENDING' ? 'Draft saved.' : 'Draft rejected.')
+    } catch (error) {
+      setError(error.message)
+      if (status === 'APPROVED' && reviewed) await refreshDelivery()
+    } finally { setBusy(false) }
+  }
+  async function submitEmployeeEmails() {
+    const delivery = await api(`/decisions/${id}/send`, { method: 'POST' })
+    apply(await api(`/decisions/${id}`))
+    if (delivery.status === 'ACCEPTED') setNotice('Message approved. Employee emails accepted by the provider for delivery.')
+    else setError(`Message approved, but employee email status is ${delivery.status}. Check the delivery record before trying again.`)
+  }
+  async function refreshDelivery() {
+    try { apply(await api(`/decisions/${id}`)) } catch { /* The server also blocks duplicate submissions. */ }
+  }
+  async function send() {
+    setBusy(true); setError(''); setNotice('')
+    try {
+      await submitEmployeeEmails()
+    } catch (error) {
+      setError(error.message)
+      await refreshDelivery()
+    } finally { setBusy(false) }
   }
   function download() {
     const recipients = detail.recipients.filter(row => row.included).map(row => row.email)
@@ -407,7 +443,7 @@ function DecisionDetails({ id, onDirtyChange, onNavigate }) {
     <section className="card review-panel" ref={stepPanel} tabIndex={-1} aria-busy={busy} aria-label={`${['Risk', 'Recipients', 'Message'][step]} review`}>
       {step === 0 && <RiskStep detail={detail} form={form} busy={busy} onEdit={edit} timezone={zone} onPosture={changePosture} />}
       {step === 1 && <RecipientStep rows={rows} selection={selection} busy={busy} detail={detail} timezone={zone} onPreview={preview} onToggle={toggle} />}
-      {step === 2 && <MessageStep detail={detail} form={form} rows={rows} busy={busy} dirty={dirty} ready={ready} essential={essential} onEssential={setEssential} onEdit={edit} onSave={save} onDownload={download} />}
+      {step === 2 && <MessageStep detail={detail} form={form} rows={rows} busy={busy} dirty={dirty} ready={ready} essential={essential} email={email} onEssential={setEssential} onEdit={edit} onSave={save} onDownload={download} onSend={send} />}
       <div className="step-actions">{step > 0 ? <button disabled={busy} onClick={() => changeStep(step - 1)}>← {step === 1 ? 'Risk' : 'Recipients'}</button> : <span className="help">You choose the final action.</span>}
         {step < 2 && <button className="primary" disabled={busy || !ready} onClick={() => changeStep(step + 1)}>{busy ? 'Updating recipients…' : `Continue to ${step === 0 ? 'recipients' : 'message'} →`}</button>}</div>
     </section><ReviewHistory detail={detail} timezone={zone} />
@@ -418,9 +454,16 @@ export default function App() {
   const [loggedIn, setLoggedIn] = useState(Boolean(sessionStorage.getItem('facility_token')))
   const [decisionId, setDecisionId] = useState(decisionFromHash())
   const [dirty, setDirty] = useState(false)
+  const [account, setAccount] = useState(null)
   const dirtyRef = useRef(false)
   const currentHash = useRef(window.location.hash)
   const onDirtyChange = useCallback(value => { dirtyRef.current = value; setDirty(value) }, [])
+  useEffect(() => {
+    let active = true
+    if (loggedIn) api('/me').then(value => { if (active) setAccount(value) }).catch(() => {})
+    else setAccount(null)
+    return () => { active = false }
+  }, [loggedIn])
   function canLeave() {
     if (dirtyRef.current && !window.confirm('Discard your unsaved draft changes?')) return false
     dirtyRef.current = false
@@ -446,7 +489,7 @@ export default function App() {
   }, [dirty])
   if (!loggedIn) return <Login onLogin={() => setLoggedIn(true)} />
   return <><header className="app-header"><a className="brand" href="#" onClick={onNavigate}><span className="brand-mark">F</span>Facility Operations</a>
-    <div className="inline-actions"><span className="draft-mode">Manager approval required</span><span className="manager-name">{sessionStorage.getItem('facility_manager')}</span><button className="small-button" onClick={logout}>Sign out</button></div></header>
+    <div className="inline-actions"><span className="draft-mode">Manager approval required</span><span className="manager-name">{account?.name || sessionStorage.getItem('facility_manager')}{account && <small>Manager ID: {account.emp_id} · {account.email}</small>}</span><button className="small-button" onClick={logout}>Sign out</button></div></header>
     {decisionId ? <DecisionDetails key={decisionId} id={decisionId} onDirtyChange={onDirtyChange} onNavigate={onNavigate} /> : <Dashboard />}
     <footer>Manager-reviewed recommendations · Demo policy · Not an emergency warning service</footer></>
 }

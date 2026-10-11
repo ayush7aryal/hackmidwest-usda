@@ -165,6 +165,29 @@ def submit_delivery(config: dict, message: EmailMessage, targets: list[str]) -> 
     return {'refused': submit_smtp(config, message, targets)}
 
 
+def delivery_outcome(config: dict, message: EmailMessage, targets: list[str]) -> dict:
+    """Record provider acceptance separately from confirmed inbox delivery."""
+    outcome = {'accepted_addresses': []}
+    try:
+        result = submit_delivery(config, message, targets)
+        refused = result.pop('refused')
+        accepted = [target for target in targets if target not in refused]
+        outcome.update(result, accepted_addresses=accepted,
+                       status='FAILED' if not accepted else 'PARTIAL' if refused else 'ACCEPTED',
+                       refused_addresses=list(refused))
+    except SendGridResponseError as error:
+        rejected = 400 <= error.status_code < 500 and error.status_code != 408
+        outcome.update(status='FAILED' if rejected else 'UNKNOWN',
+                       http_status=error.status_code, error=str(error))
+    except (SMTPSetupError, smtplib.SMTPAuthenticationError, smtplib.SMTPRecipientsRefused,
+            smtplib.SMTPSenderRefused, smtplib.SMTPDataError) as error:
+        outcome.update(status='FAILED', error=type(error).__name__)
+    except Exception as error:
+        # After submitting, an unexpected failure must also block duplicate retries.
+        outcome.update(status='UNKNOWN', error=type(error).__name__)
+    return outcome | {'completed_at': utc_now()}
+
+
 def send_decision(db, decision_id: int, manager_id: int) -> dict:
     """Persist the claim before submission; keep uncertain outcomes inspectable."""
     try:
@@ -185,25 +208,11 @@ def send_decision(db, decision_id: int, manager_id: int) -> dict:
                     'intended_employee_ids': [employee['emp_id'] for employee in recipients],
                     'message_id': str(message['Message-ID'])}
         db.execute('UPDATE decisions SET delivery_json = ? WHERE id = ?', (json.dumps(delivery), decision_id))
-    accepted = []
-    try:
-        result = submit_delivery(config, message, targets)
-        refused = result.pop('refused')
-        delivery.update(result)
-        accepted = [target for target in targets if target not in refused]
-        delivery.update(status='FAILED' if not accepted else 'PARTIAL' if refused else 'ACCEPTED', refused_addresses=list(refused))
-    except SendGridResponseError as error:
-        definite_rejection = 400 <= error.status_code < 500 and error.status_code != 408
-        delivery.update(status='FAILED' if definite_rejection else 'UNKNOWN',
-                        http_status=error.status_code, error=str(error))
-    except (SMTPSetupError, smtplib.SMTPAuthenticationError, smtplib.SMTPRecipientsRefused, smtplib.SMTPSenderRefused, smtplib.SMTPDataError) as error:
-        delivery.update(status='FAILED', error=type(error).__name__)
-    except (OSError, smtplib.SMTPException) as error:
-        delivery.update(status='UNKNOWN', error=type(error).__name__)
+    delivery.update(delivery_outcome(config, message, targets))
+    accepted = delivery['accepted_addresses']
     if accepted:
         delivery['accepted_employee_ids'] = [employee['emp_id'] for employee in recipients
                                              if config['redirect'] or employee['email'] in accepted]
-    delivery.update(completed_at=utc_now(), accepted_addresses=accepted)
     with db:
         db.execute('UPDATE decisions SET delivery_json = ?, sent_at = ? WHERE id = ?',
                    (json.dumps(delivery), delivery['completed_at'] if accepted else None, decision_id))

@@ -3,11 +3,12 @@
 A hackathon MVP for manager-reviewed US office disruption advice: FastAPI,
 SQLite, one Strands agent, two live data tools, React/Vite, and two Docker
 containers. Built from [the blueprint](docs/HACKATHON_IMPLEMENTATION.md).
-**The current judging demo prepares, approves and downloads messages.**
-Email controls and provider setup notices are removed from the frontend, and
-delivery is disabled in the demo deployment. The optional SendGrid HTTPS and
-SMTP backends are kept for later use. Scheduled checks and the agent never send
-employee messages.
+**Manager first, employees only by choice.** When a daily check changes a facility
+from NORMAL to a disruption, SendGrid automatically emails its assigned managers
+a review request and dashboard link. The manager reviews the risk, selects staff,
+and clicks **Approve and send email** to save approval and submit it to those
+employees. Saving a draft, scheduled checks and the agent never send employee
+messages. Previously approved unsent messages also have an explicit send button.
 
 ## Run the complete application locally
 
@@ -108,9 +109,10 @@ For delivery through HTTPS instead of SMTP, follow
 uv; configuration requires `EMAIL_PROVIDER=sendgrid`, `SENDGRID_API_KEY` and a
 verified `EMAIL_FROM`. No SMTP-port access or Gmail App Password is required.
 
-The current demo exposes message preparation, approval and download only. The
-SMTP settings below document the optional backend for later use; leave
-`EMAIL_ENABLED=false` during judging. There is no send button in the frontend.
+The demo exposes message preparation, approval, download and explicit employee
+sending. Enable `EMAIL_ENABLED=true` and `MANAGER_ALERTS_ENABLED=true`, and set
+`APP_BASE_URL` to the dashboard origin (locally `http://localhost:8080`). The SMTP
+settings below remain an optional alternative; SendGrid uses HTTPS instead.
 
 Run the additive demo command after building the current backend image:
 
@@ -234,13 +236,16 @@ acceptance is recorded honestly; inbox delivery is not confirmed by SMTP.
   The dashboard retains previous alerts as potentially outdated during outages.
   New, revised and removed alerts flag review even if posture remains NORMAL.
   The agent only recommends; the manager chooses the action and message audience,
-  edits text, approves or rejects, and downloads the saved message. The current
-  demo does not expose email sending.
+  edits text, approves or rejects, and chooses whether to send the saved message.
 - Each decision retains original inputs, advice, recipients, draft and subsequent
   reviews in JSON. No extra audit or notification tables.
 - APScheduler checks every three hours (`EVALUATION_INTERVAL_HOURS=3`) with
   `max_instances=1`, `coalesce=True`, one process lock and one Uvicorn worker. Startup checks are opt-in. Material changes create
-  in-app review flags only. The scheduler never sends employee emails.
+  in-app review flags. Daily NORMAL-to-disruption transitions also email assigned
+  managers when enabled. Repeated non-normal checks and returns to NORMAL do not
+  email managers. Seven-day planning prepares future shift drafts; it does not
+  change current status or automatically email anyone. The scheduler never sends
+  employee emails.
 
 ## API
 
@@ -264,7 +269,8 @@ mode requires a configured password and stable session secret.
 | GET | `/api/decisions/{id}` | Evidence/draft/review record |
 | POST | `/api/decisions/{id}/recipients` | Fresh selection preview |
 | POST | `/api/decisions/{id}/review` | Save/approve/reject with edited text |
-| GET | `/api/email-status` | SMTP configuration readiness; authenticated |
+| GET | `/api/me` | Current manager name, login ID and email; authenticated |
+| GET | `/api/email-status` | Email provider configuration readiness; authenticated |
 | POST | `/api/decisions/{id}/send` | Explicit delivery of the approved saved message |
 
 The send route reloads staff, validates the saved approval and uses only the

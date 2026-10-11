@@ -1,5 +1,44 @@
 # MVP verification — October 10, 2026
 
+Manager-first notification update (supersedes the disabled-email notes below):
+
+- Automatic manager review requests now run after committed daily evaluations,
+  including the three-hour scheduler, only on NORMAL-to-disruption transitions.
+  Repeated same-status checks, returns to NORMAL and weekly future planning do
+  not send manager alerts. The assigned managers receive separate envelopes;
+  employee demo redirects cannot change their destination.
+- The exact manager email template and delivery status are visible in the Risk
+  step. It includes facility, previous/new posture, affected local times, saved
+  rationale, dashboard link, and manager names, login IDs and email addresses.
+  The authenticated header also shows the current account ID and email.
+- Employee delivery uses **Approve and send email**: an explicit dashboard
+  action saves approval, then submits to selected employees. Preview, Save draft,
+  Reject and automatic manager email do not send employee messages. The review
+  endpoint itself never sends; a failed review stops the combined action. The
+  existing fresh roster, essential confirmation, ownership and duplicate guards
+  still apply.
+- **266 backend tests and 27 frontend DOM tests passed**, plus the production
+  frontend build. New tests exercise the actual SendGrid SDK with fake HTTPS:
+  all four disruption transitions, normal suppression, repeated claims/checks,
+  scheduler routing, private manager envelopes, committed claims before network
+  access, missing managers, provider rejection/timeouts, saved evidence despite
+  email failure, and the combined approve/send action, approval failures, missing
+  email setup and uncertain provider outcomes without duplicate sends.
+- Rebuilt/restarted both local and Akamai services successfully. SendGrid employee
+  delivery and automatic manager alerts are enabled, with separate dashboard
+  origins for local and cloud. Public trusted HTTPS checks passed for all seven
+  manager logins, current account IDs/emails, facility isolation, provider readiness,
+  and the served **Approve and send email** frontend asset.
+- Akamai database integrity/foreign-key checks passed: 13 facilities, 111 users,
+  nine shifts and 114 decisions preserved in exactly four tables. A consistent
+  backup was made at
+  `/root/facility-backups/before-manager-alerts-20261011T020924Z.db`.
+  The scheduler remains enabled at three hours, with startup evaluation disabled.
+- No real operational employee email or manager approval was performed by these
+  tests. Provider acceptance is distinct from confirmed inbox delivery. Uncertain
+  submissions block retries; failures remain inspectable in the decision record.
+
+
 SendGrid integration update:
 
 - Installed the official `sendgrid==6.12.5` SDK through uv and updated the lockfile.

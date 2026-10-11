@@ -19,6 +19,7 @@ new Function('require', 'module', 'exports', bundle.outputFiles[0].text)(createR
 const App = module.exports.default
 const response = (data, status = 200) => new Response(JSON.stringify(data), { status, headers: { 'Content-Type': 'application/json' } })
 let root, fixture, requests, failPreview, failWeek, failAlerts, downloadBlob, downloadName
+let emailReady, sendStatus, failReview
 
 function employee(id, name, included, reason, essential = false, remote = false) {
   return { emp_id: id, name, email: `${id}@example.com`, location_id: 1, shift_id: 1, shift_name: 'Weekday early',
@@ -57,6 +58,7 @@ function previewRows(body) {
 
 beforeEach(() => {
   fixture = makeFixture(); requests = []; failPreview = false; failWeek = false; failAlerts = false; downloadBlob = null; downloadName = null
+  emailReady = true; sendStatus = 'ACCEPTED'; failReview = false
   window.history.replaceState(null, '', '/')
   sessionStorage.clear(); sessionStorage.setItem('facility_token', 'synthetic-token'); sessionStorage.setItem('facility_manager', 'Synthetic Manager')
   document.body.innerHTML = '<div id="root"></div>'
@@ -66,6 +68,8 @@ beforeEach(() => {
   globalThis.fetch = async (path, options = {}) => {
     const body = options.body ? JSON.parse(options.body) : undefined
     requests.push({ path, method: options.method || 'GET', body })
+    if (path === '/api/me') return response({ emp_id: 1001, name: 'Synthetic Manager', email: 'manager@example.com', location_id: 1 })
+    if (path === '/api/email-status') return response({ ready: emailReady, provider: 'sendgrid', demo_redirect: true })
     if (path === '/api/locations' && !body) return response([fixture.office])
     if (path === '/api/locations' && options.method === 'POST') { fixture.office = { ...fixture.office, ...body }; fixture.week = null; return response(fixture.office) }
     if (String(path).startsWith('https://geocoding-api.open-meteo.com/')) return response({ results: [{ id: 1, name: 'Panama City Beach', admin1: 'Florida', country: 'United States', latitude: 30.1766, longitude: -85.8055, timezone: 'America/Chicago' }] })
@@ -75,7 +79,12 @@ beforeEach(() => {
     if (path === '/api/locations/1/evaluate-week') return response(failWeek ? { state: 'INSUFFICIENT_DATA', message: 'Synthetic model outage', days: [] } : fixture.week)
     if (path === '/api/decisions/14' && !body) return response(fixture.decision)
     if (path === '/api/decisions/14/recipients') return failPreview ? response({ detail: 'Synthetic recipient outage' }, 503) : response(previewRows(body))
+    if (path === '/api/decisions/14/send') {
+      fixture.decision = { ...fixture.decision, sent_at: sendStatus === 'ACCEPTED' ? '2026-10-10T20:00:00Z' : null, delivery: { status: sendStatus, provider: 'sendgrid' } }
+      return response(fixture.decision.delivery)
+    }
     if (path === '/api/decisions/14/review') {
+      if (failReview) return response({ detail: 'Staff selection changed; review again.' }, 409)
       if (body.status === 'APPROVED' && !body.essential_confirmed) return response({ detail: 'Essential confirmation required' }, 422)
       fixture.decision = { ...fixture.decision, ...body, manager_status: body.status, recipients: previewRows(body), alternatives: { ...fixture.decision.alternatives, recipient_selection: { scope: body.scope, include_ids: body.include_ids, exclude_ids: body.exclude_ids } } }
       return response(fixture.decision)
@@ -182,20 +191,20 @@ test('three-step review keeps excluded staff available and shows only affected-d
 test('essential confirmation gates approval and saved export includes the actual recipient list', async () => {
   await mount('#decision/14'); await click(button('Continue to recipients →')); await click(button('Continue to message →'))
   assert.equal(document.querySelector('.message-input') !== null, true)
-  assert.equal(button('Approve message').disabled, true)
+  assert.equal(button('Approve and send email').disabled, true)
   await click(document.querySelector('.check-notice input'))
-  assert.equal(button('Approve message').disabled, false)
+  assert.equal(button('Approve and send email').disabled, false)
   await change(document.querySelector('.message-input'), 'SYNTHETIC: Manager-approved Wednesday shift instructions.')
   assert.equal(button('Download saved message ↓').disabled, true)
-  await click(button('Approve message'))
+  await click(button('Approve and send email'))
   const saved = requests.find(item => item.path.endsWith('/review'))
   assert.equal(saved.body.status, 'APPROVED'); assert.equal(saved.body.essential_confirmed, true)
   assert.equal(saved.body.draft_body, 'SYNTHETIC: Manager-approved Wednesday shift instructions.')
-  assert.match(document.querySelector('.success').textContent, /Message ready to download/)
+  assert.match(document.querySelector('.success').textContent, /Message approved/)
   await click(button('Download saved message ↓'))
   assert.match(await downloadBlob.text(), /To: 1101@example.com, 1104@example.com/)
   assert.equal(downloadName, 'decision-14-approved.txt')
-  assert.equal(requests.some(item => item.path.endsWith('/send')), false)
+  assert.equal(requests.filter(item => item.path.endsWith('/send')).length, 1)
 })
 
 test('recipient refresh failure blocks approval until a successful retry', async () => {
@@ -203,11 +212,11 @@ test('recipient refresh failure blocks approval until a successful retry', async
   await click(button('Continue to recipients →'))
   assert.match(document.querySelector('[role=alert]').textContent, /Synthetic recipient outage/)
   await click(button('3Message'))
-  assert.equal(button('Approve message').matches(':disabled'), true)
+  assert.equal(button('Approve and send email').matches(':disabled'), true)
   failPreview = false
   await click(button('2Recipients')); await click(button('Refresh staff')); await click(button('Continue to message →'))
   await click(document.querySelector('.check-notice input'))
-  assert.equal(button('Approve message').matches(':disabled'), false)
+  assert.equal(button('Approve and send email').matches(':disabled'), false)
 })
 
 test('unsaved edits can cancel navigation and recipient exclusions survive the next step', async () => {
@@ -381,21 +390,63 @@ test('normal operations leave recipients unchecked and a manager override resets
   assert(button('Selected (2)'))
   await click(button('Continue to message →'))
   assert.match(document.querySelector('.message-input').value, /Recommended action: CLOSED/)
-  assert(![...document.querySelectorAll('button')].some(item => /send.*email/i.test(item.textContent)))
+  assert.equal(button('Approve and send email').disabled, true)
 })
 
-test('demo message flow approves and downloads without email controls or provider requests', async () => {
+test('approve and send submits review first, sends once and blocks repeat sending', async () => {
   await mount('#decision/14'); await click(button('Continue to recipients →')); await click(button('Continue to message →'))
-  assert.doesNotMatch(document.querySelector('.review-panel').textContent, /SMTP|provider|send approved email|checking email/i)
+  assert.equal(requests.filter(item => item.path.endsWith('/send')).length, 0)
   await click(document.querySelector('.check-notice input'))
-  await click(button('Approve message'))
+  await click(button('Approve and send email'))
   assert.equal(fixture.decision.manager_status, 'APPROVED')
-  assert.equal(requests.filter(item => item.path.endsWith('/send') || item.path.endsWith('/email-status')).length, 0)
-  assert(![...document.querySelectorAll('button')].some(item => /send.*email/i.test(item.textContent)))
+  const actions = requests.filter(item => /\/(review|send)$/.test(item.path))
+  assert.deepEqual(actions.map(item => item.path), ['/api/decisions/14/review', '/api/decisions/14/send'])
+  assert.equal(button('Send employee emails').disabled, true)
+  assert.match(document.querySelector('.success').textContent, /accepted by the provider/)
   assert.equal(button('Download saved message ↓').disabled, false)
   await click(button('Download saved message ↓'))
   assert.equal(downloadName, 'decision-14-approved.txt')
   assert(downloadBlob)
+})
+
+test('manager account and review email show the correct login ID and destination', async () => {
+  fixture.decision.alternatives.manager_alert = { status: 'ACCEPTED', template: {
+    to: ['manager@example.com'], subject: 'Please review: Synthetic facility',
+    body: 'Hello Synthetic Manager,\nManager ID (login): 1001 | manager@example.com\nPlease review the risk.' } }
+  await mount('#decision/14')
+  assert.match(document.querySelector('.manager-name').textContent, /Manager ID: 1001 · manager@example.com/)
+  const email = document.querySelector('.manager-review-email')
+  assert.equal(email.open, false)
+  assert.match(email.textContent, /Please review: Synthetic facility/)
+  assert.match(email.textContent, /manager@example.com/)
+})
+
+test('failed approval never attempts employee delivery', async () => {
+  failReview = true
+  await mount('#decision/14'); await click(button('3Message')); await click(document.querySelector('.check-notice input'))
+  await click(button('Approve and send email'))
+  assert.equal(requests.filter(item => item.path.endsWith('/send')).length, 0)
+  assert.equal(fixture.decision.manager_status, 'PENDING')
+  assert.match(document.querySelector('[role=alert]').textContent, /Staff selection changed/)
+})
+
+test('uncertain combined sending shows a failure and disables duplicate submission', async () => {
+  sendStatus = 'UNKNOWN'
+  await mount('#decision/14'); await click(button('3Message')); await click(document.querySelector('.check-notice input'))
+  await click(button('Approve and send email'))
+  assert.equal(fixture.decision.manager_status, 'APPROVED')
+  assert.match(document.querySelector('[role=alert]').textContent, /email status is UNKNOWN/)
+  assert.equal(button('Approve and send email').matches(':disabled'), true)
+  assert.equal(button('Send employee emails').disabled, true)
+  assert.equal(requests.filter(item => item.path.endsWith('/send')).length, 1)
+})
+
+test('unconfigured email or no affected employees disables combined sending', async () => {
+  emailReady = false
+  await mount('#decision/14'); await click(button('3Message')); await click(document.querySelector('.check-notice input'))
+  assert.equal(button('Approve and send email').disabled, true)
+  assert.match(document.querySelector('.review-panel').textContent, /Email sending is unavailable/)
+  assert.equal(button('Save draft').matches(':disabled'), false)
 })
 
 test('changing an action reselects a previously excluded affected employee', async () => {

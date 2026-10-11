@@ -1,8 +1,9 @@
 # Deploy the MVP on Akamai Cloud
 
 One Compute Instance runs FastAPI/Strands, React/Nginx, and a named SQLite volume.
-NWS, Open-Meteo and the model API are upstream services. Optional SMTP delivery
-requires a manager to approve and explicitly send each employee message.
+NWS, Open-Meteo and the model API are upstream services. SendGrid over HTTPS
+notifies managers on daily NORMAL-to-disruption transitions. Every employee
+message still requires the manager to click **Approve and send email**.
 
 SQLite runs inside the Python backend and stores its file on the instance's
 persistent Docker volume. You do not need to create an Akamai Managed Database.
@@ -21,7 +22,8 @@ but this MVP follows the blueprint's SQLite requirement. See Akamai's
   computer's public IPv4. Update that rule in Akamai if your public IP changes.
 - Project directory: `/root/facility-operations`; Compose project:
   `facility-operations`; database volume: `facility-operations_facility_data`.
-- Manager IDs: `1001` and `2001`. A private copy of the generated production
+- Manager IDs: `1001`, `2001`, `51001`, `52001`, `53001`, `54001`, `55001`.
+  A private copy of the generated production
   password is on the deployment computer at
   `artifacts/akamai-manager-password.txt` (mode 600, excluded from Git).
   Production configuration is `/root/facility-operations/.env` (mode 600).
@@ -30,6 +32,10 @@ but this MVP follows the blueprint's SQLite requirement. See Akamai's
   `~/.ssh/hackmidwest_akamai_ed25519`. Password SSH login is disabled.
 - The migrated database initially contained 7 facilities, 26 users, 3 shifts and
   91 decisions. Existing data was imported before startup, without re-seeding.
+- SendGrid is configured with `EMAIL_ENABLED=true`, `MANAGER_ALERTS_ENABLED=true`
+  and `APP_BASE_URL=https://172.236.119.150`. Manager alerts are automatic only
+  for daily NORMAL-to-disruption transitions; employee sends require the manager
+  action in the dashboard. No historical pending/approved decision is auto-sent.
 - Daily facility checks run every three hours; the seven-day plan is refreshed
   from the manager UI. Added facilities are automatically included in scheduled
   checks. Messages remain pending for manager review. See the README five-location
@@ -277,9 +283,13 @@ three-hour cadence inside the API container; this host timer only manages TLS.
    **Evaluate today** for the single-day facility status.
 3. Inspect real source URLs/timestamps, modeled AQI labeling and policy rules.
 4. Review every inclusion/exclusion; try facility-wide scope for remote staff.
-5. Edit subject/body, confirm essential-staff instructions, and approve.
-6. Download the saved message. The current judging demo has no email controls;
-   keep `EMAIL_ENABLED=false`. Scheduled checks do not send employee messages.
+5. Edit subject/body, confirm essential-staff instructions, and click
+   **Approve and send email** to approve and submit to the selected employees.
+6. Alternatively, save a draft or download the message without sending.
+   With `EMAIL_ENABLED=true`, `MANAGER_ALERTS_ENABLED=true`, and
+   `APP_BASE_URL=https://172.236.119.150`, daily NORMAL-to-disruption changes
+   automatically email assigned managers. Scheduled checks never send employee
+   messages. Check **Risk → Manager review email** for the exact template/status.
 7. Restart `api` and confirm persisted decision history.
 
 ```sh

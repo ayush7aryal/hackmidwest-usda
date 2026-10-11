@@ -129,6 +129,12 @@ def locations(db: DB, manager: ManagerSession) -> list[dict]:
     return [dict(owned_location(db, manager, manager["location_id"]))]
 
 
+@router.get('/me')
+def manager_account(manager: ManagerSession) -> dict:
+    """Show the current login ID and review-email destination after authentication."""
+    return {key: manager[key] for key in ('emp_id', 'name', 'email', 'location_id')}
+
+
 @router.get("/locations/{location_id}", response_model=models.Location)
 def location(location_id: RouteID, db: DB, manager: ManagerSession) -> dict:
     """Read the latest facility state without manufacturing an evaluation."""
