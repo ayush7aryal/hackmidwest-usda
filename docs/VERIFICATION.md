@@ -1,5 +1,40 @@
 # MVP verification — October 10, 2026
 
+Affected-recipient selection correction (supersedes unchanged-operation notes):
+
+- Identified the live failure in Jacksonville decision #114: two employees were
+  classified `unchanged_operation` and unchecked despite no employee submission.
+  Prior recommendations had incorrectly been treated as delivery history.
+- Removed that blanket suppression. Daily drafts, weekly counts, previews,
+  approvals and final sending now use one employee-submission rule. Affected
+  unnotified staff remain selected even when the recommendation stays the same.
+  Previously accepted employees remain excluded individually; unresolved provider
+  submissions block blind repeat sending across decisions. Definite failures
+  leave recipients eligible. No new tables, agents or data tools are added.
+- Added **Select affected staff** to reset manual exclusions. Remote/unscheduled
+  staff stay excluded, normal operations still have no automatic audience, and
+  sent/unresolved addresses cannot be rechecked through facility-wide scope.
+  The policy panel now labels the cutoffs as app-defined demo thresholds and
+  links each rule's reference guidance. Numeric policy cutoffs are unchanged.
+- **272 backend tests and 30 frontend DOM tests passed**, plus the production
+  frontend build. Regression coverage includes repeated evaluations before any
+  employee send, recovery of legacy snapshots, per-employee accepted subsets,
+  unresolved/failed submissions, accurate weekly counts, checkbox selection,
+  manual exclusion reset and audience safeguards. Provider transports are fake
+  in tests; no operational email is sent by this verification.
+- Rebuilt/restarted both local and Akamai containers. Public trusted HTTPS and
+  facility isolation passed. A live read-only preview of Jacksonville decision
+  #114 now selects employee IDs 52110 and 52111, including one essential employee;
+  it previously had zero checked recipients. Remote/off-shift employees remain
+  excluded. The saved recommendation, roster snapshot and delivery fields were
+  unchanged by verification; no employee email was submitted.
+- Akamai retained all 13 facilities, 111 users, nine shifts and 114 decisions.
+  Integrity/foreign keys passed, and a consistent pre-update backup is at
+  `/root/facility-backups/before-recipient-fix-20261011T022446Z.db`. SendGrid and
+  three-hour manager checks remain enabled. The current frontend asset includes
+  the reset-selection button and policy reference links.
+
+
 Manager-first notification update (supersedes the disabled-email notes below):
 
 - Automatic manager review requests now run after committed daily evaluations,

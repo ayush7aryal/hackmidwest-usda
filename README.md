@@ -173,10 +173,14 @@ The current instance timed out connecting to Gmail ports 465 and 587. A Gmail
 App Password and working outbound SMTP are required before a real send can be
 verified. Request SMTP access from Akamai support; no extra server is required.
 
-Automatic NORMAL recommendations have no notification audience. An unchanged
-non-normal action covering the same previously checked window also has no
-notification audience; new dates or an extended window remain eligible.
-Changing the action clears manual exclusions and freshly selects all eligible
+Automatic NORMAL recommendations have no notification audience. Repeated
+non-normal recommendations keep affected on-site employees selected until their
+notification is actually submitted. A prior evaluation or manager review email
+is not an employee notification. Duplicate checks compare the latest employee
+submission for the same action and a covering time window, per employee. Uncertain
+submissions remain excluded until their provider outcome is resolved.
+**Select affected staff** clears manual exclusions without changing the action.
+Changing the action also clears manual exclusions and freshly selects all eligible
 on-site staff for this decision's date/shift/window. An explicit return-to-normal
 override can notify those staff too. Essential instructions still need confirmation;
 remote/off-shift staff require the explicit facility-wide audience.

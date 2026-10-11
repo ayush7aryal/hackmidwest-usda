@@ -9,7 +9,6 @@ from app import agent, tools
 from app.evaluator import save_decision
 from app.db import utc_now
 from app.models import Recommendation
-from app.notification_rules import notification_rule
 from app.recipients import DAYS, filter_roster, load_roster, local_boundary
 from app.thresholds import forecast_wind_mph, operating_window, policy_context, timestamp
 
@@ -120,9 +119,10 @@ def save_week(db: sqlite3.Connection, location: dict, signals: dict, days: list[
                 rows = filter_roster(roster, location, group["start"], group["end"], group["posture"], shift_id=group["shift_id"])
                 decision_id = save_decision(db, location, grouped, signals, context, group, recipients=rows)
                 day["decision_ids"].append(decision_id)
+                saved_rows = json.loads(db.execute('SELECT recipients_json FROM decisions WHERE id = ?',
+                                                  (decision_id,)).fetchone()[0])
                 day["message_groups"].append(group | {"decision_id": decision_id,
-                    "recipient_count": sum(row["included"] for row in rows) if notification_rule(
-                        location, group["posture"], group["start"], group["end"])["required"] else 0,
+                    "recipient_count": sum(row['included'] for row in saved_rows),
                     "manager_status": "PENDING"})
         result = {"state": "COMPLETED", "days": days, "evaluated_at": utc_now(),
                   "message": "Seven dates checked. Only affected date/shift groups have recipient drafts. Review each before approval; no emails sent."}

@@ -2,20 +2,14 @@
 
 import json
 
-from app.thresholds import timestamp
 
-
-def notification_rule(snapshot: dict, posture: str, start: str, end: str, override: bool = False) -> dict:
-    """Suppress routine all-clears and an unchanged action covering the same window."""
+def notification_rule(posture: str, override: bool = False) -> dict:
+    """A repeated recommendation is not proof that employees were notified."""
     if override:
         return {"required": True, "reason": "manager_override"}
     if posture == "NORMAL":
         return {"required": False, "reason": "normal_operations"}
-    if snapshot.get("last_checked_at") and snapshot.get("status") == posture:
-        previous_start, previous_end = snapshot.get("affected_start"), snapshot.get("affected_end")
-        if previous_start and previous_end and timestamp(previous_start) <= timestamp(start) and timestamp(previous_end) >= timestamp(end):
-            return {"required": False, "reason": "unchanged_operation"}
-    return {"required": True, "reason": "operation_changed"}
+    return {"required": True, "reason": "disruption"}
 
 
 def suppress_recipients(rows: list[dict], reason: str) -> list[dict]:
@@ -24,19 +18,37 @@ def suppress_recipients(rows: list[dict], reason: str) -> list[dict]:
                    "requires_manager_review": False, "warning": None} for row in rows]
 
 
-def already_notified(db, decision: dict, recipients: list[dict]) -> set[int]:
-    """Compare each recipient's latest submitted action for a covering time window."""
+def delivery_blocks(db, decision: dict, recipients: list[dict]) -> dict[int, str]:
+    """Use actual employee submissions, including unresolved provider outcomes."""
     history = db.execute(
         """SELECT posture, delivery_json FROM decisions WHERE location_id = ? AND id != ?
-           AND sent_at IS NOT NULL AND julianday(affected_start) <= julianday(?)
-           AND julianday(affected_end) >= julianday(?) ORDER BY sent_at DESC, id DESC""",
+           AND (sent_at IS NOT NULL OR json_extract(delivery_json, '$.status') IN ('IN_PROGRESS', 'UNKNOWN'))
+           AND julianday(affected_start) <= julianday(?) AND julianday(affected_end) >= julianday(?)
+           ORDER BY COALESCE(sent_at, json_extract(delivery_json, '$.requested_at')) DESC, id DESC""",
         (decision["location_id"], decision["id"], decision["affected_start"], decision["affected_end"]),
     )
     pending = {row["emp_id"] for row in recipients}
-    duplicate = set()
+    blocked = {}
     for previous in history:
-        delivered = set(json.loads(previous["delivery_json"] or '{}').get("accepted_employee_ids", [])) & pending
+        delivery = json.loads(previous['delivery_json'] or '{}')
+        uncertain = delivery.get('status') in ('IN_PROGRESS', 'UNKNOWN')
+        delivered = set(delivery.get('intended_employee_ids' if uncertain else 'accepted_employee_ids', [])) & pending
         if previous["posture"] == decision["posture"]:
-            duplicate.update(delivered)
+            blocked.update({emp_id: 'delivery_uncertain' if uncertain else 'already_notified' for emp_id in delivered})
         pending -= delivered
-    return duplicate
+    return blocked
+
+
+def notification_recipients(db, decision: dict, recipients: list[dict], override: bool = False) -> list[dict]:
+    """Keep unnotified affected employees selected; never bypass prior submissions."""
+    rule = notification_rule(decision['posture'], override)
+    if not rule['required']:
+        return suppress_recipients(recipients, rule['reason'])
+    blocked = delivery_blocks(db, decision, recipients)
+    return [suppress_recipients([row], blocked[row['emp_id']])[0]
+            if row['included'] and row['emp_id'] in blocked else row for row in recipients]
+
+
+def already_notified(db, decision: dict, recipients: list[dict]) -> set[int]:
+    """Final send guard also blocks unresolved submissions for these employees."""
+    return set(delivery_blocks(db, decision, recipients))

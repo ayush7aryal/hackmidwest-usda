@@ -47,18 +47,63 @@ def test_approval_then_explicit_send_is_idempotent(client, headers, evaluated, p
     assert len(provider)==1
 
 
-def test_same_operation_unchecked_but_override_reselects_affected_staff(client, headers, db_path, evaluated, provider):
+def test_same_operation_keeps_unnotified_affected_staff_selected(client, headers, db_path, evaluated, provider):
     second=evaluator.evaluate(db_path,1,1001)
     detail=client.get(f"/api/decisions/{second['decision_id']}",headers=headers).json()
-    assert detail['alternatives']['notification']=={'required':False,'reason':'unchanged_operation'}
-    assert not any(r['included'] for r in detail['recipients'])
+    assert detail['alternatives']['notification']=={'required':True,'reason':'disruption'}
+    assert {r['emp_id'] for r in detail['recipients'] if r['included']}=={1101,1102,1104,1105}
     url=f"/api/decisions/{detail['id']}"
     same=client.post(url+'/recipients',headers=headers,json={'scope':'all_staff'}).json()
-    assert not any(r['included'] for r in same)
+    assert len([r for r in same if r['included']])==6
     rows=client.post(url+'/recipients',headers=headers,json={'posture':'CLOSED'}).json()
     assert {r['emp_id'] for r in rows if r['included']}=={1101,1102,1104,1105}
-    approve(client,headers,detail,posture='CLOSED')
+    approve(client,headers,detail)
     assert client.post(url+'/send',headers=headers).json()['status']=='ACCEPTED'
+    third=evaluator.evaluate(db_path,1,1001)
+    rows=client.get(f"/api/decisions/{third['decision_id']}",headers=headers).json()['recipients']
+    assert not any(r['included'] for r in rows)
+    assert {r['emp_id'] for r in rows if r['reason']=='already_notified'}=={1101,1102,1104,1105}
+
+
+def test_legacy_unchanged_snapshot_recovers_on_preview_and_approval(client, headers, db_path, evaluated, provider):
+    with closing(connect(db_path)) as db, db:
+        alt=evaluated['alternatives'] | {'notification':{'required':False,'reason':'unchanged_operation'}}
+        rows=[r | {'included':False,'reason':'unchanged_operation' if r['included'] else r['reason'],
+                   'requires_manager_review':False} for r in evaluated['recipients']]
+        db.execute('UPDATE decisions SET alternatives_json=?,recipients_json=? WHERE id=?',
+                   (json.dumps(alt),json.dumps(rows),evaluated['id']))
+    url=f"/api/decisions/{evaluated['id']}"
+    assert not any(r['included'] for r in client.get(url,headers=headers).json()['recipients'])
+    rows=client.post(url+'/recipients',headers=headers,json={'scope':'affected'}).json()
+    assert {r['emp_id'] for r in rows if r['included']}=={1101,1102,1104,1105}
+    saved=approve(client,headers,evaluated)
+    assert saved['alternatives']['notification']=={'required':True,'reason':'disruption'}
+    assert client.post(url+'/send',headers=headers).json()['status']=='ACCEPTED'
+
+
+@pytest.mark.parametrize('prior_status,blocked', [('UNKNOWN',True),('IN_PROGRESS',True),('FAILED',False)])
+def test_repeat_evaluation_respects_uncertain_submissions_but_allows_definite_failure(
+        client, headers, db_path, evaluated, provider, prior_status, blocked):
+    with closing(connect(db_path)) as db, db:
+        db.execute('UPDATE decisions SET delivery_json=? WHERE id=?',
+                   (json.dumps({'status':prior_status,'intended_employee_ids':[1101],
+                                'requested_at':'2026-10-12T12:00:00Z'}), evaluated['id']))
+    second=evaluator.evaluate(db_path,1,1001)
+    url=f"/api/decisions/{second['decision_id']}"
+    rows=client.post(url+'/recipients',headers=headers,json={}).json()
+    row=next(r for r in rows if r['emp_id']==1101)
+    assert row['included'] is (not blocked)
+    assert row['reason']==('delivery_uncertain' if blocked else 'scheduled_on_site')
+    assert {r['emp_id'] for r in rows if r['included']}==({1102,1104,1105} if blocked else {1101,1102,1104,1105})
+
+
+def test_previously_notified_subset_does_not_hide_other_affected_staff(client, headers, db_path, evaluated, provider):
+    approve(client,headers,evaluated,exclude_ids=[1102,1104,1105])
+    assert client.post(f"/api/decisions/{evaluated['id']}/send",headers=headers).json()['status']=='ACCEPTED'
+    second=evaluator.evaluate(db_path,1,1001)
+    detail=client.get(f"/api/decisions/{second['decision_id']}",headers=headers).json()
+    assert {r['emp_id'] for r in detail['recipients'] if r['included']}=={1102,1104,1105}
+    assert next(r for r in detail['recipients'] if r['emp_id']==1101)['reason']=='already_notified'
 
 
 def test_normal_automatic_action_has_no_audience_even_with_all_staff_scope(client, headers, evaluated, db_path, provider):
@@ -143,12 +188,10 @@ def test_send_ownership_setup_and_header_guards(client, headers, evaluated, prov
     assert not provider
 
 
-def test_new_dates_and_extended_windows_are_not_silently_suppressed():
-    snapshot={'status':'TELEWORK','last_checked_at':'2026-10-12T12:00:00Z',
-              'affected_start':'2026-10-12T13:00:00Z','affected_end':'2026-10-12T23:00:00Z'}
-    assert not notification_rule(snapshot,'TELEWORK','2026-10-12T13:00:00Z','2026-10-12T23:00:00Z')['required']
-    assert notification_rule(snapshot,'TELEWORK','2026-10-13T13:00:00Z','2026-10-13T23:00:00Z')['required']
-    assert notification_rule(snapshot,'TELEWORK','2026-10-12T13:00:00Z','2026-10-13T00:00:00Z')['required']
+def test_disruption_eligibility_does_not_depend_on_last_evaluation():
+    assert notification_rule('TELEWORK')['required']
+    assert not notification_rule('NORMAL')['required']
+    assert notification_rule('NORMAL',override=True)['required']
 
 
 def test_real_smtp_adapter_requires_tls_and_does_not_retry(monkeypatch, provider):

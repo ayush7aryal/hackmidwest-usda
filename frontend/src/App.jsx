@@ -4,7 +4,7 @@ import FacilityMap from './FacilityMap.jsx'
 
 const POSTURES = ['NORMAL', 'DELAYED_OPENING', 'EARLY_DISMISSAL', 'TELEWORK', 'CLOSED']
 const LABELS = { NORMAL: 'Normal operations', DELAYED_OPENING: 'Delayed opening', EARLY_DISMISSAL: 'Early dismissal', TELEWORK: 'Work remotely', CLOSED: 'Closed', PENDING: 'Needs review', APPROVED: 'Approved', REJECTED: 'Rejected' }
-const REASONS = { scheduled_on_site: 'Scheduled on-site', manager_selected: 'Selected by manager', facility_wide: 'Facility-wide notice', not_scheduled: 'Outside affected hours', already_remote: 'Already remote', manager: 'Manager', no_disruption: 'No schedule change', normal_operations: 'Normal operations · no notification needed', unchanged_operation: 'Unchanged action · no notification needed', already_notified: 'Already notified for this window', invalid_shift: 'Schedule needs correction', manager_excluded: 'Excluded by manager' }
+const REASONS = { scheduled_on_site: 'Scheduled on-site', manager_selected: 'Selected by manager', facility_wide: 'Facility-wide notice', not_scheduled: 'Outside affected hours', already_remote: 'Already remote', manager: 'Manager', no_disruption: 'No schedule change', normal_operations: 'Normal operations · no notification needed', unchanged_operation: 'Refresh staff to check notification eligibility', already_notified: 'Already notified for this window', delivery_uncertain: 'Previous email submission unresolved', invalid_shift: 'Schedule needs correction', manager_excluded: 'Excluded by manager' }
 const label = value => LABELS[value] || value?.replaceAll('_', ' ') || '—'
 const decisionFromHash = () => window.location.hash.match(/^#decision\/(\d+)$/)?.[1] || null
 const audienceDefault = () => ({ scope: 'affected', include_ids: [], exclude_ids: [] })
@@ -266,7 +266,7 @@ function shiftHours(row, affectedStart, timezone) {
 function EmployeeTable({ rows, onToggle, busy, scope, affectedStart, timezone }) {
   return <div className="table-scroll"><table><thead><tr><th><span className="sr-only">Include</span></th><th>Employee</th><th>Affected shift</th><th>Selection</th></tr></thead><tbody>
     {rows.map(row => <tr key={row.emp_id} className={row.included ? '' : 'filtered'}><td><input type="checkbox" aria-label={`Include ${row.name}`} checked={row.included}
-      disabled={busy || (scope === 'affected' && ['not_scheduled', 'already_remote', 'invalid_shift', 'no_disruption', 'normal_operations', 'unchanged_operation', 'already_notified'].includes(row.reason))} onChange={event => onToggle(row.emp_id, event.target.checked)} /></td>
+      disabled={busy || ['already_notified', 'delivery_uncertain'].includes(row.reason) || (scope === 'affected' && ['not_scheduled', 'already_remote', 'invalid_shift', 'no_disruption', 'normal_operations', 'unchanged_operation'].includes(row.reason))} onChange={event => onToggle(row.emp_id, event.target.checked)} /></td>
       <td><strong>{row.name}</strong><small>{row.email}</small><div className="employee-flags">{row.is_essential && <Badge tone="pending">Essential</Badge>}{row.is_teleworking && <Badge>Remote</Badge>}{row.is_manager && <Badge>Manager</Badge>}</div></td>
       <td>{row.shift_name || 'No shift'}<small>{shiftHours(row, affectedStart, timezone)}</small></td><td>{REASONS[row.reason] || label(row.reason)}</td></tr>)}
   </tbody></table></div>
@@ -276,20 +276,26 @@ function RecipientStep({ rows, selection, busy, onPreview, onToggle, detail, tim
   const [view, setView] = useState('included')
   const included = rows.filter(row => row.included)
   const visible = rows.filter(row => view === 'included' ? row.included : !row.included)
-  return <><div className="section-head"><div><p className="eyebrow">STEP 2 OF 3</p><h2>Who needs this message?</h2></div><button disabled={busy} className="small-button" onClick={() => onPreview(selection)}>Refresh staff</button></div>
+  const emptyMessage = rows.some(row => ['normal_operations', 'no_disruption'].includes(row.reason))
+    ? 'Normal operations: no automatic employee notice is needed. Choose a different action in Risk if local impacts require it.'
+    : 'No eligible employees selected. Open Excluded to see why, or select affected staff to clear manual exclusions.'
+  return <><div className="section-head"><div><p className="eyebrow">STEP 2 OF 3</p><h2>Who needs this message?</h2></div><div className="inline-actions">
+    {selection.scope === 'affected' && <button disabled={busy} className="small-button" onClick={() => { setView('included'); onPreview(audienceDefault()) }}>Select affected staff</button>}
+    <button disabled={busy} className="small-button" onClick={() => onPreview(selection)}>Refresh staff</button></div></div>
     <label>Audience<select disabled={busy} value={selection.scope} onChange={event => { setView('included'); onPreview({ scope: event.target.value, include_ids: [], exclude_ids: [] }) }}>
       <option value="affected">Affected on-site employees</option><option value="all_staff">Everyone at this facility</option></select></label>
     <p className="help">{selection.scope === 'affected' ? 'Matched to this date and time window. Remote and unscheduled staff are excluded.' : 'Includes remote and unscheduled staff. Select the manager explicitly if needed.'}</p>
     <div className="segmented" role="group" aria-label="Recipient list"><button aria-pressed={view === 'included'} onClick={() => setView('included')}>Selected ({included.length})</button><button aria-pressed={view === 'excluded'} onClick={() => setView('excluded')}>Excluded ({rows.length - included.length})</button></div>
     {included.some(row => row.requires_manager_review) && <p className="essential-note">Essential staff are selected. Confirm their instructions in the next step.</p>}
-    {visible.length ? <EmployeeTable rows={visible} busy={busy} scope={selection.scope} onToggle={onToggle} affectedStart={detail.affected_start} timezone={timezone} /> : <div className="small-empty">{view === 'included' ? 'No employees selected. Review excluded staff or change the audience.' : 'No excluded employees.'}</div>}
+    {visible.length ? <EmployeeTable rows={visible} busy={busy} scope={selection.scope} onToggle={onToggle} affectedStart={detail.affected_start} timezone={timezone} /> : <div className="small-empty">{view === 'included' ? emptyMessage : 'No excluded employees.'}</div>}
   </>
 }
 
 function DecisionEvidence({ detail, timezone }) {
   return <details className="disclosure"><summary>Evidence, confidence & policy</summary><p className="help">Confidence {detail.confidence.toFixed(2)} · qualitative estimate, not a probability. Actions follow the app's demo policy.</p>
     <h3>Uncertainty</h3><p>{detail.alternatives.uncertainty || 'Requires manager review.'}</p><h3>What could change the recommendation</h3><ul>{detail.alternatives.what_would_change?.map((item, index) => <li key={index}>{item}</li>)}</ul>
-    <h3>Policy thresholds</h3><div className="table-scroll"><table><thead><tr><th>Rule</th><th>Trigger</th><th>Source value</th></tr></thead><tbody>{detail.thresholds.map((row, index) => <tr key={index}><td>{row.rule}<small>{row.policy_version}</small></td><td>{row.threshold}</td><td>{row.actual}<small>{row.margin}</small></td></tr>)}</tbody></table></div>
+    <h3>Policy thresholds</h3><p className="help">App-defined demo thresholds, anchored to the guidance linked below. The agent explains the inputs; you choose the final action.</p>
+    <div className="table-scroll"><table><thead><tr><th>Rule</th><th>Trigger</th><th>Source value</th></tr></thead><tbody>{detail.thresholds.map((row, index) => <tr key={index}><td>{row.rule}<small>{row.policy_version}</small>{row.provenance && <small><a href={row.provenance} target="_blank" rel="noreferrer">Reference guidance ↗</a></small>}</td><td>{row.threshold}</td><td>{row.actual}<small>{row.margin}</small></td></tr>)}</tbody></table></div>
     <h3>Source evidence</h3><div className="evidence-grid">{detail.evidence.map((row, index) => <article className="evidence" key={index}><a href={row.url} target="_blank" rel="noreferrer">{row.source} ↗</a><p className="help">{when(row.observed_at, timezone)}</p>
       {row.value?.modeled && <Badge>Modeled AQI</Badge>}<details><summary>Source values</summary><pre>{JSON.stringify(row.value, null, 2)}</pre></details></article>)}</div>
   </details>

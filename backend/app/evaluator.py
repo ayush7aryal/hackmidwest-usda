@@ -15,7 +15,7 @@ from app.db import connect, utc_now
 from app.drafts import prepare_message
 from app.models import Recommendation
 from app.manager_alerts import notify_manager
-from app.notification_rules import notification_rule, suppress_recipients
+from app.notification_rules import notification_recipients, notification_rule
 from app.recipients import select_recipients
 from app.thresholds import policy_context, timestamp
 
@@ -121,9 +121,10 @@ def save_decision(db: sqlite3.Connection, location: dict, result: Recommendation
         recipients = select_recipients(db, location, result.affected_start.isoformat(),
                                       result.affected_end.isoformat(), result.posture,
                                       shift_id=group.get("shift_id") if group else None, impact_windows=windows)
-    notification = notification_rule(location, result.posture, result.affected_start.isoformat(), result.affected_end.isoformat())
-    if not notification["required"]:
-        recipients = suppress_recipients(recipients, notification["reason"])
+    notification = notification_rule(result.posture)
+    recipients = notification_recipients(db, {
+        'id': 0, 'location_id': location['id'], 'posture': result.posture,
+        'affected_start': result.affected_start.isoformat(), 'affected_end': result.affected_end.isoformat()}, recipients)
     manager = db.execute("SELECT * FROM users WHERE location_id = ? AND is_manager = 1 ORDER BY emp_id LIMIT 1",
                          (location["id"],)).fetchone()
     draft = result.model_dump(mode="json")

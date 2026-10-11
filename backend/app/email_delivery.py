@@ -152,9 +152,9 @@ def approved_recipients(db, row: dict, location: dict) -> list[dict]:
                          **selection.model_dump(exclude={'posture'}))
     validate_approval(row, location, alternatives, fresh, body)
     if not recipients:
-        raise HTTPException(409, "No notification needed: normal/unchanged operations or no affected staff")
+        raise HTTPException(409, "No eligible recipients: normal operations, no affected staff, or prior email submissions")
     if already_notified(db, row, recipients):
-        raise HTTPException(409, "Some recipients already received this action for this window; refresh and exclude them before approving again")
+        raise HTTPException(409, "Some recipients already received this action or have an unresolved submission for this window; refresh and approve again")
     return recipients
 
 

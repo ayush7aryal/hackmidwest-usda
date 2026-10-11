@@ -50,9 +50,10 @@ function makeFixture() {
 function previewRows(body) {
   return fixture.decision.recipients.map(row => {
     const eligible = body.scope === 'all_staff' || ((body.posture !== 'NORMAL' || body.posture !== fixture.decision.alternatives.original_recommendation.posture) && !row.is_teleworking && row.weekly_hours.wed)
-    const included = Boolean(eligible && !body.exclude_ids?.includes(row.emp_id))
+    const blocked = ['already_notified', 'delivery_uncertain'].includes(row.reason)
+    const included = Boolean(eligible && !blocked && !body.exclude_ids?.includes(row.emp_id))
     return { ...row, included, requires_manager_review: included && row.is_essential,
-      reason: body.exclude_ids?.includes(row.emp_id) ? 'manager_excluded' : included ? 'scheduled_on_site' : row.is_teleworking ? 'already_remote' : 'not_scheduled' }
+      reason: blocked ? row.reason : body.exclude_ids?.includes(row.emp_id) ? 'manager_excluded' : included ? 'scheduled_on_site' : row.is_teleworking ? 'already_remote' : 'not_scheduled' }
   })
 }
 
@@ -457,4 +458,39 @@ test('changing an action reselects a previously excluded affected employee', asy
   await change(document.querySelector('select'), 'CLOSED')
   await click(button('Continue to recipients →'))
   assert(button('Selected (2)'))
+})
+
+test('refreshing legacy unchanged recommendations checks affected employees without changing action', async () => {
+  fixture.decision.alternatives.notification = { required: false, reason: 'unchanged_operation' }
+  fixture.decision.recipients = fixture.decision.recipients.map(row => row.included
+    ? { ...row, included: false, reason: 'unchanged_operation', requires_manager_review: false } : row)
+  await mount('#decision/14'); await click(button('2Recipients'))
+  assert(button('Selected (2)'))
+  assert(document.querySelector('[aria-label="Include Casey Demo"]').checked)
+  assert(document.querySelector('[aria-label="Include Avery Demo"]').checked)
+  assert.equal(requests.filter(item => item.path.endsWith('/recipients')).at(-1).body.posture, 'TELEWORK')
+  assert.equal(requests.filter(item => item.path.endsWith('/send')).length, 0)
+})
+
+test('select affected staff clears manual exclusions and keeps remote staff unchecked', async () => {
+  await mount('#decision/14'); await click(button('2Recipients'))
+  await click(document.querySelector('[aria-label="Include Casey Demo"]'))
+  assert(button('Selected (1)'))
+  await click(button('Select affected staff'))
+  assert(button('Selected (2)'))
+  assert(document.querySelector('[aria-label="Include Casey Demo"]').checked)
+  assert.deepEqual(requests.filter(item => item.path.endsWith('/recipients')).at(-1).body.exclude_ids, [])
+  await click(button('Excluded (2)'))
+  assert.equal(document.querySelector('[aria-label="Include Riley Remote"]').checked, false)
+  assert.equal(document.querySelector('[aria-label="Include Riley Remote"]').disabled, true)
+})
+
+test('submitted and unresolved recipients cannot be rechecked through a wider audience', async () => {
+  fixture.decision.recipients[0] = { ...fixture.decision.recipients[0], included: false, reason: 'already_notified' }
+  fixture.decision.recipients[1] = { ...fixture.decision.recipients[1], included: false, reason: 'delivery_uncertain' }
+  await mount('#decision/14'); await click(button('2Recipients'))
+  await change(document.querySelector('select'), 'all_staff')
+  await click(button('Excluded (2)'))
+  assert.equal(document.querySelector('[aria-label="Include Casey Demo"]').disabled, true)
+  assert.equal(document.querySelector('[aria-label="Include Avery Demo"]').disabled, true)
 })

@@ -89,6 +89,28 @@ def test_hazard_starting_at_early_shift_end_only_notifies_late_shift(client, hea
     assert groups[0]['posture'] == 'EARLY_DISMISSAL' and groups[0]['recipient_count'] == 2
 
 
+def test_weekly_counts_use_employee_delivery_instead_of_last_recommendation(client, headers, db_path, weekly_sources):
+    first = evaluate_week(client, headers)
+    groups = first['days'][2]['message_groups']
+    # A daily recommendation alone must not clear the weekly audience.
+    with closing(connect(db_path)) as db, db:
+        db.execute("""UPDATE locations SET status='TELEWORK', last_checked_at=?,
+                   affected_start=?, affected_end=? WHERE id=1""",
+                   (NOW.isoformat(), '2026-10-14T13:00:00Z', '2026-10-14T23:00:00Z'))
+    second = evaluate_week(client, headers)
+    assert [group['recipient_count'] for group in second['days'][2]['message_groups']] == [2, 2]
+    # Only the employee actually submitted in this synthetic prior delivery is excluded.
+    with closing(connect(db_path)) as db, db:
+        db.execute('UPDATE decisions SET sent_at=?, delivery_json=? WHERE id=?',
+                   (NOW.isoformat(), json.dumps({'status': 'ACCEPTED', 'accepted_employee_ids': [1101]}),
+                    groups[0]['decision_id']))
+    third = evaluate_week(client, headers)
+    assert [group['recipient_count'] for group in third['days'][2]['message_groups']] == [1, 2]
+    for group in third['days'][2]['message_groups']:
+        detail = client.get(f"/api/decisions/{group['decision_id']}", headers=headers).json()
+        assert group['recipient_count'] == sum(row['included'] for row in detail['recipients'])
+
+
 def test_disjoint_hazards_do_not_notify_a_shift_working_only_in_the_gap(client, headers, db_path, weekly_sources):
     data = weekly_sources[0]
     data['weather']['alerts'] = [alert('2026-10-14T13:00:00Z', '2026-10-14T14:00:00Z'),

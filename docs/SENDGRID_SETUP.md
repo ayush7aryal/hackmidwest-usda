@@ -93,3 +93,19 @@ Switching providers does not bypass a previous accepted or uncertain submission.
 
 Tests exercise the real SDK request construction with a mocked HTTP transport.
 Real delivery needs the account key, a verified sender and a live provider test.
+
+## Affected employees versus repeated evaluations
+
+Selecting **Affected on-site employees** reloads the facility roster and matches
+actual shift dates/hours against the decision's impact windows. Remote and
+unscheduled staff remain excluded. A repeated non-normal recommendation alone
+never clears the selection: employees remain eligible until a real employee
+submission is recorded. Manager review emails do not count as employee delivery.
+Prior accepted recipients are excluded individually for the same action and a
+covering window; unresolved submissions are labeled separately and block blind
+retries across decisions. Definite failures do not mark employees as notified.
+
+Use **Select affected staff** to clear manual exclusions and recalculate the
+eligible audience. **Refresh staff** preserves explicit selections/exclusions.
+Previously saved decisions with the old `unchanged_operation` suppression recover
+when their Recipients step is refreshed; audit snapshots are not rewritten.
