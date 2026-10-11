@@ -238,3 +238,10 @@ class ReviewRequest(RecipientSelection):
     draft_subject: str = Field(min_length=1, max_length=240)
     draft_body: str = Field(min_length=1, max_length=20000)
     essential_confirmed: bool = False
+
+    @field_validator("draft_subject")
+    @classmethod
+    def single_line_subject(cls, value: str) -> str:
+        if '\r' in value or '\n' in value:
+            raise ValueError("Email subjects must be a single line")
+        return value

@@ -67,6 +67,15 @@ def insert_staff(connection: sqlite3.Connection) -> None:
 
 
 if __name__ == "__main__":
-    changed = seed(database_path())
-    print("Seeded 2 facilities, 2 managers, 12 staff and 3 shifts."
-          if changed else "Database already contains data; nothing changed.")
+    import argparse
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--expand-demo", action="store_true", help="Add five managed facilities and 80 staff without resetting data")
+    parser.add_argument("--demo-inbox", help="Assign numbered Gmail aliases to all synthetic employees")
+    args = parser.parse_args()
+    if args.expand_demo:
+        from demo_data import expand_demo
+        print(json.dumps(expand_demo(database_path(), args.demo_inbox)))
+    else:
+        changed = seed(database_path())
+        print("Seeded 2 facilities, 2 managers, 12 staff and 3 shifts."
+              if changed else "Database already contains data; nothing changed.")

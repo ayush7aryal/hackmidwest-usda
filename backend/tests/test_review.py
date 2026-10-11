@@ -39,7 +39,7 @@ def test_complete_evaluate_preview_edit_approve_workflow(client, headers, evalua
     assert saved["sent_at"] is None and saved["delivery"] is None
     assert saved["alternatives"]["original_recommendation"]["reason"] == evaluated["reason"]
     assert saved["alternatives"]["original_draft"]["body"].startswith("DRAFT")
-    assert client.post(url + "/send", headers=headers, json={}).status_code == 404
+    assert client.post(url + "/send", headers=headers, json={}).status_code == 503
 
 
 def test_essential_acknowledgment_and_foreign_ids(client, headers, evaluated):
@@ -56,7 +56,8 @@ def test_preview_reloads_staff_and_can_prepare_posture_override(client, headers,
     rows = client.post(f"/api/decisions/{evaluated['id']}/recipients", headers=headers, json={}).json()
     assert next(row for row in rows if row["emp_id"] == 1101)["reason"] == "already_remote"
     rows = client.post(f"/api/decisions/{evaluated['id']}/recipients", headers=headers, json={"posture": "NORMAL"}).json()
-    assert not any(row["included"] for row in rows)
+    assert any(row["included"] for row in rows)  # Explicit return-to-normal override informs affected on-site staff.
+    assert not next(row for row in rows if row['emp_id'] == 1101)['included']
 
 
 @pytest.mark.parametrize("posture", ["NORMAL", "DELAYED_OPENING", "EARLY_DISMISSAL", "TELEWORK", "CLOSED"])

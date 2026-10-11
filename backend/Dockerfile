@@ -6,7 +6,7 @@ ENV UV_COMPILE_BYTECODE=1 UV_LINK_MODE=copy PYTHONUNBUFFERED=1
 COPY pyproject.toml uv.lock ./
 RUN uv sync --locked --no-dev --no-install-project
 COPY app ./app
-COPY schema.sql seed.py ./
+COPY schema.sql seed.py demo_data.py ./
 RUN groupadd --gid 10001 app && useradd --uid 10001 --gid app --no-create-home app && \
     mkdir -p /data && chown app:app /data
 ENV PATH="/app/.venv/bin:$PATH" DATABASE_PATH=/data/facility.db

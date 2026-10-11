@@ -1,5 +1,50 @@
 # MVP verification — October 10, 2026
 
+Five-office demo and explicit email update (October 10, Chicago time):
+
+- **235 backend tests** and **23 frontend DOM interaction tests** passed. The
+  production frontend build passed. Added coverage checks additive/idempotent
+  seeding, ownership, all-day/weekend/holiday shift matching, NORMAL/unchanged
+  suppression, manager overrides, duplicate recipients, stale approvals,
+  partial/uncertain delivery and retry behavior. SMTP unit tests use a fake
+  transport; they do not establish real delivery.
+- Backed up the live database before the additive migration to
+  `/root/facility-backups/before-demo-20261011T000548Z.db`. Existing facilities,
+  manager assignments and 100 decisions were preserved. Five additional managers
+  and offices, 80 fictional staff and six shift templates were added. The app
+  retains exactly four tables and its original one-agent/two-hazard-tool design.
+- Public trusted HTTPS checks passed for all seven managers and facility
+  isolation. Each new manager sees one office and 16 employees. All 104 synthetic
+  staff have unique numbered aliases of the configured Gmail inbox. These are
+  aliases to one real inbox, not separate mailboxes.
+- Five live evaluations saved decisions #101–105 using live weather/AQI sources
+  and the configured adviser. Jacksonville returned TELEWORK with two recipients;
+  Panama City Beach, Charleston, Savannah and Tampa returned NORMAL with zero
+  checked recipients. CLOSED override previews selected the two scheduled onsite
+  staff per office, flagged one essential employee, and excluded remote staff.
+  A second Jacksonville evaluation (#106) again returned TELEWORK and correctly
+  selected zero recipients with `unchanged_operation` suppression.
+  These are time-specific observations; a location cannot guarantee severe weather
+  during a later demo. Advisories remain visible even when operations are NORMAL.
+- The deployed scheduler remains enabled every 10,800 seconds and reloads all
+  saved locations, including the five additions. Tests check new-location
+  inclusion; no new full elapsed three-hour cycle is claimed by this update.
+- Final cloud checks found 13 locations, 111 users, nine shifts and 106 decisions;
+  integrity/foreign-key checks passed. Exactly `api` and `web` are healthy.
+  Both Docker images were also rebuilt locally and the additive seed applied
+  after backing up the local database. All five new local logins passed; local
+  history was preserved. Local and cloud database volumes remain separate.
+- Gmail accepted **one setup test** from the local computer through the actual
+  application's SMTP adapter to the owner's `+1` alias. No operational decision
+  was approved or sent by this test; inbox receipt is not independently verified.
+  The Gmail App Password stays in ignored/private configuration files. Connections
+  from Akamai to Gmail SMTP ports 587 and 465 still timed out after the user
+  requested access. Cloud email delivery remains blocked by outbound connectivity.
+  Approval and explicit sending remain separate manager actions.
+
+Earlier deployment and implementation checks follow; their counts and outcomes
+describe the snapshots verified at that time.
+
 Akamai deployment verified on October 10, 2026:
 
 - Live app: **https://172.236.119.150**. Instance `107866813` is running in Chicago

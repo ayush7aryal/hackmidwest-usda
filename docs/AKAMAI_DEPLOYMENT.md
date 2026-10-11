@@ -1,7 +1,8 @@
 # Deploy the MVP on Akamai Cloud
 
 One Compute Instance runs FastAPI/Strands, React/Nginx, and a named SQLite volume.
-NWS, Open-Meteo and the model API are upstream services. Email delivery is absent.
+NWS, Open-Meteo and the model API are upstream services. Optional SMTP delivery
+requires a manager to approve and explicitly send each employee message.
 
 SQLite runs inside the Python backend and stores its file on the instance's
 persistent Docker volume. You do not need to create an Akamai Managed Database.
@@ -31,7 +32,8 @@ but this MVP follows the blueprint's SQLite requirement. See Akamai's
   91 decisions. Existing data was imported before startup, without re-seeding.
 - Daily facility checks run every three hours; the seven-day plan is refreshed
   from the manager UI. Added facilities are automatically included in scheduled
-  checks. Messages remain pending for manager review; email delivery is absent.
+  checks. Messages remain pending for manager review. See the README five-location
+  demo and Gmail section for the added accounts, aliases and SMTP configuration.
 
 Connect and inspect:
 
@@ -276,7 +278,8 @@ three-hour cadence inside the API container; this host timer only manages TLS.
 3. Inspect real source URLs/timestamps, modeled AQI labeling and policy rules.
 4. Review every inclusion/exclusion; try facility-wide scope for remote staff.
 5. Edit subject/body, confirm essential-staff instructions, and approve.
-6. Download the saved message. No mail or external notifications are sent.
+6. Download the saved message, or use **Send approved email** after SMTP setup.
+   Scheduled checks do not send employee messages.
 7. Restart `api` and confirm persisted decision history.
 
 ```sh

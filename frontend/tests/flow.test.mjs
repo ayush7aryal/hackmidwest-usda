@@ -48,7 +48,7 @@ function makeFixture() {
 
 function previewRows(body) {
   return fixture.decision.recipients.map(row => {
-    const eligible = body.scope === 'all_staff' || (body.posture !== 'NORMAL' && !row.is_teleworking && row.weekly_hours.wed)
+    const eligible = body.scope === 'all_staff' || ((body.posture !== 'NORMAL' || body.posture !== fixture.decision.alternatives.original_recommendation.posture) && !row.is_teleworking && row.weekly_hours.wed)
     const included = Boolean(eligible && !body.exclude_ids?.includes(row.emp_id))
     return { ...row, included, requires_manager_review: included && row.is_essential,
       reason: body.exclude_ids?.includes(row.emp_id) ? 'manager_excluded' : included ? 'scheduled_on_site' : row.is_teleworking ? 'already_remote' : 'not_scheduled' }
@@ -66,6 +66,8 @@ beforeEach(() => {
   globalThis.fetch = async (path, options = {}) => {
     const body = options.body ? JSON.parse(options.body) : undefined
     requests.push({ path, method: options.method || 'GET', body })
+    if (path === '/api/email-status') return response({ ready: true, demo_redirect: false, message: 'Synthetic provider ready.' })
+    if (path === '/api/decisions/14/send') { fixture.decision = { ...fixture.decision, sent_at: '2026-10-10T20:00:00Z', delivery: { status: 'ACCEPTED' } }; return response(fixture.decision.delivery) }
     if (path === '/api/locations' && !body) return response([fixture.office])
     if (path === '/api/locations' && options.method === 'POST') { fixture.office = { ...fixture.office, ...body }; fixture.week = null; return response(fixture.office) }
     if (String(path).startsWith('https://geocoding-api.open-meteo.com/')) return response({ results: [{ id: 1, name: 'Panama City Beach', admin1: 'Florida', country: 'United States', latitude: 30.1766, longitude: -85.8055, timezone: 'America/Chicago' }] })
@@ -195,7 +197,7 @@ test('essential confirmation gates approval and saved export includes the actual
   await click(button('Download saved message ↓'))
   assert.match(await downloadBlob.text(), /To: 1101@example.com, 1104@example.com/)
   assert.equal(downloadName, 'decision-14-approved.txt')
-  assert.equal(requests.some(item => /send|mail/.test(item.path)), false)
+  assert.equal(requests.some(item => item.path.endsWith('/send')), false)
 })
 
 test('recipient refresh failure blocks approval until a successful retry', async () => {
@@ -258,9 +260,9 @@ test('changing the action recomputes recipients before the next step', async () 
   await change(document.querySelector('select'), 'NORMAL')
   assert.equal(requests.find(item => item.path.endsWith('/recipients')).body.posture, 'NORMAL')
   await click(button('Continue to recipients →'))
-  assert(button('Selected (0)'))
+  assert(button('Selected (2)'))
   await click(button('Continue to message →'))
-  assert.match(document.querySelector('.review-panel').textContent, /No recipients selected/)
+  assert.match(document.querySelector('.review-panel').textContent, /2 recipients/)
   assert.match(document.querySelector('.review-panel').textContent, /Your action changed/)
 })
 
@@ -353,4 +355,58 @@ test('operational action is highlighted only in the Risk review panel', async ()
   assert.equal(document.querySelector('.operational-action'), null)
   assert.equal(document.querySelector('.review-panel').textContent.includes('Work remotely'), false)
   assert.equal(document.querySelector('.review-panel').textContent.includes('Approval saves the draft'), false)
+})
+
+test('five additional managers are available at login with their demo cities', async () => {
+  sessionStorage.clear()
+  await mount()
+  const options = [...document.querySelectorAll('select option')]
+  assert.equal(options.length, 7)
+  assert(options.some(option => option.value === '52001' && option.textContent.includes('Jacksonville')))
+  assert(options.some(option => option.value === '53001' && option.textContent.includes('Charleston')))
+})
+
+test('normal operations leave recipients unchecked and a manager override resets exclusions', async () => {
+  fixture.decision.posture = 'NORMAL'
+  fixture.decision.alternatives.original_recommendation.posture = 'NORMAL'
+  fixture.decision.recipients = fixture.decision.recipients.map(row => ({ ...row, included: false, requires_manager_review: false, reason: 'normal_operations' }))
+  fixture.decision.draft_body = 'Recommended action: NORMAL\nSynthetic instructions.'
+  await mount('#decision/14')
+  await click(button('Continue to recipients →'))
+  assert(button('Selected (0)'))
+  await click(button('1Risk'))
+  await change(document.querySelector('select'), 'CLOSED')
+  const request = requests.filter(item => item.path.endsWith('/recipients')).at(-1)
+  assert.deepEqual(request.body.exclude_ids, [])
+  assert.equal(request.body.posture, 'CLOSED')
+  await click(button('Continue to recipients →'))
+  assert(button('Selected (2)'))
+  await click(button('Continue to message →'))
+  assert.match(document.querySelector('.message-input').value, /Recommended action: CLOSED/)
+  assert.equal(button('Send approved email').disabled, true)
+})
+
+test('email requires a separate explicit send after approval and cannot be repeated', async () => {
+  await mount('#decision/14'); await click(button('Continue to recipients →')); await click(button('Continue to message →'))
+  assert.equal(button('Send approved email').disabled, true)
+  await click(document.querySelector('.check-notice input'))
+  await click(button('Approve message'))
+  assert.equal(requests.filter(item => item.path.endsWith('/send')).length, 0)
+  assert.equal(button('Send approved email').disabled, false)
+  await click(button('Send approved email'))
+  assert.equal(requests.filter(item => item.path.endsWith('/send')).length, 1)
+  assert.equal(button('Email submitted').disabled, true)
+  assert.equal(document.querySelector('fieldset').disabled, true)
+  assert.match(document.querySelector('.review-panel').textContent, /inbox delivery is not confirmed/)
+  assert.equal(button('Download saved message ↓').disabled, false)
+})
+
+test('changing an action reselects a previously excluded affected employee', async () => {
+  await mount('#decision/14'); await click(button('Continue to recipients →'))
+  await click(document.querySelector('[aria-label="Include Casey Demo"]'))
+  assert(button('Selected (1)'))
+  await click(button('1Risk'))
+  await change(document.querySelector('select'), 'CLOSED')
+  await click(button('Continue to recipients →'))
+  assert(button('Selected (2)'))
 })

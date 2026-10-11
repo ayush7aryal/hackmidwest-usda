@@ -1,4 +1,4 @@
-"""Manager review and fresh recipient previews; deliberately no email transport."""
+"""Manager review and fresh recipient previews; delivery lives in email_delivery."""
 
 import json
 import sqlite3
@@ -8,6 +8,7 @@ from fastapi import HTTPException
 
 from app.db import utc_now
 from app.models import RecipientSelection, ReviewRequest
+from app.notification_rules import already_notified, notification_rule, suppress_recipients
 from app.recipients import select_recipients
 from app.thresholds import timestamp
 
@@ -31,10 +32,20 @@ def recipient_preview(db: sqlite3.Connection, row: dict, location: dict, selecti
     try:
         alternatives = json.loads(row["alternatives_json"])
         group = alternatives.get("message_group", {})
-        return select_recipients(db, location, row["affected_start"], row["affected_end"],
-                                 posture, selection.scope, selection.include_ids, selection.exclude_ids,
+        original = alternatives.get("original_recommendation", {}).get("posture", row["posture"])
+        override = posture != original
+        rule = notification_rule(alternatives.get("facility_snapshot", {}), posture,
+                                 row["affected_start"], row["affected_end"], override)
+        rows = select_recipients(db, location, row["affected_start"], row["affected_end"],
+                                 "CLOSED" if override and posture == "NORMAL" else posture,
+                                 selection.scope, selection.include_ids, selection.exclude_ids,
                                  shift_id=group.get("shift_id") if selection.scope == "affected" else None,
-                                 impact_windows=alternatives.get("selection_windows"))
+                                 impact_windows=None if override else alternatives.get("selection_windows"))
+        if not rule["required"]:
+            return suppress_recipients(rows, rule["reason"])
+        duplicates = already_notified(db, row | {"posture": posture}, rows)
+        return [suppress_recipients([employee], "already_notified")[0] if employee['emp_id'] in duplicates
+                and employee['included'] else employee for employee in rows]
     except ValueError as error:
         raise HTTPException(422, str(error)) from None
 
@@ -44,6 +55,8 @@ def review_decision(db: sqlite3.Connection, decision_id: int, manager_id: int, b
     with db:
         db.execute("BEGIN IMMEDIATE")
         row, location = owned_decision(db, decision_id, manager_id)
+        if row["sent_at"] or json.loads(row["delivery_json"] or '{}').get("status") in ("IN_PROGRESS", "UNKNOWN", "PARTIAL"):
+            raise HTTPException(409, "This message has been submitted; evaluate again to prepare another action")
         alternatives = json.loads(row["alternatives_json"])
         recipients = recipient_preview(db, row, location, body, body.posture)
         if body.status == "APPROVED":
@@ -56,6 +69,9 @@ def review_decision(db: sqlite3.Connection, decision_id: int, manager_id: int, b
                         "selection": body.model_dump(include={"scope", "include_ids", "exclude_ids"}),
                         "essential_confirmed": body.essential_confirmed})
         alternatives["recipient_selection"] = body.model_dump(include={"scope", "include_ids", "exclude_ids"})
+        alternatives["notification"] = notification_rule(
+            alternatives.get("facility_snapshot", {}), body.posture, row["affected_start"], row["affected_end"],
+            body.posture != alternatives.get("original_recommendation", {}).get("posture", row["posture"]))
         message = labeled_message(body.draft_body, body.status, manager_id)
         db.execute(
             """UPDATE decisions SET posture = ?, reason = ?, draft_subject = ?, draft_body = ?,

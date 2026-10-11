@@ -3,8 +3,9 @@
 A hackathon MVP for manager-reviewed US office disruption advice: FastAPI,
 SQLite, one Strands agent, two live data tools, React/Vite, and two Docker
 containers. Built from [the blueprint](docs/HACKATHON_IMPLEMENTATION.md).
-**Email delivery is intentionally excluded.** Managers prepare, review and
-download messages; nothing is automatically sent.
+**Employee email requires explicit manager approval and a separate send action.**
+Managers can prepare and download messages without configuring SMTP. Scheduled
+checks and the agent never send employee messages.
 
 ## Run the complete application locally
 
@@ -65,7 +66,8 @@ no domain is required. Deployment details and operator commands are in the runbo
    approving. A failed recipient refresh blocks approval until retried.
 5. Save, approve or reject. Download the saved message with its recipient list.
    Approved message bodies and downloads omit draft/approval notices; review
-   status stays in the manager UI and audit record. Nothing is emailed. Past
+   status stays in the manager UI and audit record. **Send approved email** appears
+   separately and requires configured SMTP. Past
    checks and decision records are expandable.
 
 Urgent NWS instructions stay visible; advisory details, source notes, policy and
@@ -98,12 +100,90 @@ changes require a fresh evaluation before approving old advice. Office/shift
 hours are same-day; impact windows can cross midnight. Matching uses actual local
 dates and IANA timezone/DST offsets.
 
+## Five-location demo and Gmail
+
+Run the additive demo command after building the current backend image:
+
+```sh
+docker compose run --rm api python seed.py --expand-demo --demo-inbox YOUR_GMAIL@gmail.com
+```
+
+On Akamai, use both Compose files and the existing project directory. The command
+preserves facilities, IDs and decision history. It adds these separate accounts:
+
+| Manager ID | Manager | Facility | Latitude, longitude |
+| --- | --- | --- | --- |
+| 51001 | Maya Patel | Panama City Beach | 30.1766, -85.8055 |
+| 52001 | Daniel Brooks | Jacksonville | 30.3322, -81.6557 |
+| 53001 | Sofia Ramirez | Charleston | 32.7765, -79.9311 |
+| 54001 | Ethan Chen | Savannah | 32.0809, -81.0912 |
+| 55001 | Olivia Bennett | Tampa | 27.9506, -82.4572 |
+
+All accounts use the configured manager password. Each new facility has 16
+fictional employees with realistic names. Daily shifts cover 00:00–06:00,
+06:00–12:00, 12:00–18:00 and 18:00–23:59, with on-site, essential and remote
+examples in every daily shift. Additional weekday and weekend shifts make the
+exclusions visible. Daily crews work all seven days, including holiday dates;
+there is no separate holiday calendar. Same-day hours leave the final minute
+before midnight outside the MVP operating window.
+
+These cities had live NWS advisories/watches/warnings when selected. Future
+weather can change; the demo never injects fake live hazards. Managers can choose
+another action in Risk to demonstrate selection during normal weather.
+
+`--demo-inbox` assigns **all synthetic employees** numbered Gmail aliases such
+as `YOUR_GMAIL+1@gmail.com`. The first existing manager uses the base address;
+other managers use `+manager<employee-ID>` aliases because `users.email` is unique.
+These addresses all reach the same inbox, as explained by [Gmail alias help](https://support.google.com/mail/answer/22370).
+Rerun the same command with the same inbox to preserve edits without duplicates.
+
+Configure privately in `.env`, then recreate the backend:
+
+```dotenv
+EMAIL_ENABLED=true
+SMTP_HOST=smtp.gmail.com
+SMTP_PORT=587
+SMTP_USERNAME=YOUR_GMAIL@gmail.com
+SMTP_PASSWORD=<Gmail App Password>
+EMAIL_FROM=YOUR_GMAIL@gmail.com
+DEMO_EMAIL_TO=
+```
+
+Gmail App Passwords require [Google 2-Step Verification](https://support.google.com/accounts/answer/185833).
+Keep the credential out of Git and chat. For `@example.com` fixture addresses,
+set `DEMO_EMAIL_TO` to your own inbox; the adapter otherwise refuses delivery to
+reserved example domains. With real Gmail aliases, leave it blank to retain the
+individual envelope recipients. Addresses are hidden from one another in the
+message headers. Gmail can consolidate deliveries to aliases of the same inbox.
+
+[Akamai may restrict outbound SMTP on new accounts](https://techdocs.akamai.com/cloud-computing/docs/send-email).
+The current instance timed out connecting to Gmail ports 465 and 587. A Gmail
+App Password and working outbound SMTP are required before a real send can be
+verified. Request SMTP access from Akamai support; no extra server is required.
+
+Automatic NORMAL recommendations have no notification audience. An unchanged
+non-normal action covering the same previously checked window also has no
+notification audience; new dates or an extended window remain eligible.
+Changing the action clears manual exclusions and freshly selects all eligible
+on-site staff for this decision's date/shift/window. An explicit return-to-normal
+override can notify those staff too. Essential instructions still need confirmation;
+remote/off-shift staff require the explicit facility-wide audience.
+
+After approval, press **Send approved email**. The server reloads the current
+roster, checks approval/expiry/configuration and records delivery in the existing
+`decisions.delivery_json` and `sent_at`. Repeated sends are blocked; recipients
+already submitted the same action for a covering window are unchecked. The latest
+submitted action is compared per employee, so a later different action can be
+notified. Partial or uncertain SMTP outcomes cannot be blindly retried. Provider
+acceptance is recorded honestly; inbox delivery is not confirmed by SMTP.
+
 ## Scope and policy
 
 - Exactly four tables: `locations`, `users`, `shifts`, `decisions`, plus the two
   specified explicit indexes. Schema is in `backend/schema.sql`.
 - Seed: two offices, two managers, twelve staff, three weekly templates and mixed
-  essential/remote flags. All seeded employee emails use `@example.com`.
+  essential/remote flags. The additive demo expansion below adds five managed
+  facilities, 80 staff and six shifts without deleting existing records.
 - Two read-only `@tool` functions: `get_nws_weather` and `get_air_quality`. Requests
   have timeouts/backoff; NWS discovery URLs stay on its official API host.
   Open-Meteo/CAMS AQI is labeled modeled, not a verified sensor reading.
@@ -143,12 +223,13 @@ dates and IANA timezone/DST offsets.
   The dashboard retains previous alerts as potentially outdated during outages.
   New, revised and removed alerts flag review even if posture remains NORMAL.
   The agent only recommends; the manager chooses the action and message audience,
-  edits text, and approves or rejects. No action or email is dispatched.
+  edits text, and approves or rejects. Email is submitted only when the manager
+  explicitly chooses **Send approved email**.
 - Each decision retains original inputs, advice, recipients, draft and subsequent
   reviews in JSON. No extra audit or notification tables.
 - APScheduler checks every three hours (`EVALUATION_INTERVAL_HOURS=3`) with
   `max_instances=1`, `coalesce=True`, one process lock and one Uvicorn worker. Startup checks are opt-in. Material changes create
-  in-app review flags only; no manager or employee email delivery exists.
+  in-app review flags only. The scheduler never sends employee emails.
 
 ## API
 
@@ -172,9 +253,13 @@ mode requires a configured password and stable session secret.
 | GET | `/api/decisions/{id}` | Evidence/draft/review record |
 | POST | `/api/decisions/{id}/recipients` | Fresh selection preview |
 | POST | `/api/decisions/{id}/review` | Save/approve/reject with edited text |
+| GET | `/api/email-status` | SMTP configuration readiness; authenticated |
+| POST | `/api/decisions/{id}/send` | Explicit delivery of the approved saved message |
 
-There is no `/send` route or SMTP adapter. Unknown fields, including arbitrary
-mail recipients, are rejected. Messages can be downloaded through React.
+The send route reloads staff, validates the saved approval and uses only the
+selected database addresses. The request cannot provide arbitrary recipients.
+Changed staff/address selection requires another approval. Messages can also be
+downloaded through React.
 
 ## How Wednesday employees are selected
 
@@ -250,8 +335,7 @@ A covered date without affected staff has a day assessment with zero default
 recipients, allowing manager review or an explicit wider notice. Future drafts
 do not overwrite today's facility status. Each shift/window has its own editable
 text, recipient review and approval. The weekly overview survives navigation and
-restart using JSON in the existing `decisions` table. No extra tables or email
-transport are added.
+restart using JSON in the existing `decisions` table. No extra tables are added.
 
 ## Develop and test with uv
 

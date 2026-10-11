@@ -4,7 +4,7 @@ import FacilityMap from './FacilityMap.jsx'
 
 const POSTURES = ['NORMAL', 'DELAYED_OPENING', 'EARLY_DISMISSAL', 'TELEWORK', 'CLOSED']
 const LABELS = { NORMAL: 'Normal operations', DELAYED_OPENING: 'Delayed opening', EARLY_DISMISSAL: 'Early dismissal', TELEWORK: 'Work remotely', CLOSED: 'Closed', PENDING: 'Needs review', APPROVED: 'Approved', REJECTED: 'Rejected' }
-const REASONS = { scheduled_on_site: 'Scheduled on-site', manager_selected: 'Selected by manager', facility_wide: 'Facility-wide notice', not_scheduled: 'Outside affected hours', already_remote: 'Already remote', manager: 'Manager', no_disruption: 'No schedule change', invalid_shift: 'Schedule needs correction', manager_excluded: 'Excluded by manager' }
+const REASONS = { scheduled_on_site: 'Scheduled on-site', manager_selected: 'Selected by manager', facility_wide: 'Facility-wide notice', not_scheduled: 'Outside affected hours', already_remote: 'Already remote', manager: 'Manager', no_disruption: 'No schedule change', normal_operations: 'Normal operations · no email needed', unchanged_operation: 'Unchanged action · no email needed', already_notified: 'Already notified for this window', invalid_shift: 'Schedule needs correction', manager_excluded: 'Excluded by manager' }
 const label = value => LABELS[value] || value?.replaceAll('_', ' ') || '—'
 const decisionFromHash = () => window.location.hash.match(/^#decision\/(\d+)$/)?.[1] || null
 const audienceDefault = () => ({ scope: 'affected', include_ids: [], exclude_ids: [] })
@@ -95,11 +95,14 @@ function Login({ onLogin }) {
     <div className="login-flow"><span>01 Check the week</span><span>02 Review your team</span><span>03 Prepare a message</span></div>
   </section><section className="card login-card"><p className="eyebrow">MANAGER ACCESS</p><h2>Welcome back</h2>
     <form onSubmit={submit}><label>Manager account<select value={employee} onChange={event => setEmployee(event.target.value)}>
-      <option value="1001">Alex Morgan</option><option value="2001">Jordan Lee</option></select></label>
+      <option value="1001">Alex Morgan</option><option value="2001">Jordan Lee</option>
+      <option value="51001">Maya Patel · Panama City Beach</option><option value="52001">Daniel Brooks · Jacksonville</option>
+      <option value="53001">Sofia Ramirez · Charleston</option><option value="54001">Ethan Chen · Savannah</option>
+      <option value="55001">Olivia Bennett · Tampa</option></select></label>
       <label>Password<input type="password" autoComplete="current-password" value={password} onChange={event => setPassword(event.target.value)} placeholder="Manager password" /></label>
       <details className="login-help"><summary>Local demo sign-in help</summary><p className="help">Use the configured manager password. Leave blank only if no password is configured.</p></details>
       <ErrorMessage>{error}</ErrorMessage><button className="primary full" disabled={busy}>{busy ? 'Signing in…' : 'Open dashboard →'}</button>
-    </form><p className="help login-foot">Demo employee data · Messages are drafted, never sent</p></section></main>
+    </form><p className="help login-foot">Synthetic employees · Email requires manager approval</p></section></main>
 }
 
 function FacilityForm({ facility, onSaved, onCancel }) {
@@ -262,7 +265,7 @@ function shiftHours(row, affectedStart, timezone) {
 function EmployeeTable({ rows, onToggle, busy, scope, affectedStart, timezone }) {
   return <div className="table-scroll"><table><thead><tr><th><span className="sr-only">Include</span></th><th>Employee</th><th>Affected shift</th><th>Selection</th></tr></thead><tbody>
     {rows.map(row => <tr key={row.emp_id} className={row.included ? '' : 'filtered'}><td><input type="checkbox" aria-label={`Include ${row.name}`} checked={row.included}
-      disabled={busy || (scope === 'affected' && ['not_scheduled', 'already_remote', 'invalid_shift', 'no_disruption'].includes(row.reason))} onChange={event => onToggle(row.emp_id, event.target.checked)} /></td>
+      disabled={busy || (scope === 'affected' && ['not_scheduled', 'already_remote', 'invalid_shift', 'no_disruption', 'normal_operations', 'unchanged_operation', 'already_notified'].includes(row.reason))} onChange={event => onToggle(row.emp_id, event.target.checked)} /></td>
       <td><strong>{row.name}</strong><small>{row.email}</small><div className="employee-flags">{row.is_essential && <Badge tone="pending">Essential</Badge>}{row.is_teleworking && <Badge>Remote</Badge>}{row.is_manager && <Badge>Manager</Badge>}</div></td>
       <td>{row.shift_name || 'No shift'}<small>{shiftHours(row, affectedStart, timezone)}</small></td><td>{REASONS[row.reason] || label(row.reason)}</td></tr>)}
   </tbody></table></div>
@@ -300,20 +303,25 @@ function RiskStep({ detail, form, busy, onEdit, onPosture, timezone }) {
   </>
 }
 
-function MessageStep({ detail, form, rows, busy, dirty, ready, essential, onEssential, onEdit, onSave, onDownload }) {
+function MessageStep({ detail, form, rows, busy, dirty, ready, essential, onEssential, onEdit, onSave, onDownload, email, onSend }) {
   const selected = rows.filter(row => row.included)
   const needsEssential = selected.some(row => row.requires_manager_review)
+  const submitted = detail.sent_at || ['IN_PROGRESS', 'UNKNOWN', 'PARTIAL', 'ACCEPTED'].includes(detail.delivery?.status)
   return <><p className="eyebrow">STEP 3 OF 3</p><div className="section-head"><h2>Prepare your message</h2><Badge>{selected.length} recipient{selected.length === 1 ? '' : 's'}</Badge></div>
-    <p className="help">Review the wording and recipients. Email delivery is off.</p>
+    <p className="help">{email.message}</p>
+    {detail.delivery && <p className="essential-note" role="status">Email: {label(detail.delivery.status)}{detail.delivery.status === 'ACCEPTED' ? ' by provider; inbox delivery is not confirmed.' : detail.delivery.status === 'UNKNOWN' ? ' · check the provider before retrying.' : ''}</p>}
     {form.posture !== detail.posture && <p className="essential-note">Your action changed. Update the message wording to match.</p>}
-    {!selected.length && <p className="essential-note">No recipients selected. This message will be saved without an audience.</p>}
-    <form onSubmit={event => { event.preventDefault(); onSave(event.nativeEvent.submitter?.value || 'PENDING') }}><fieldset disabled={busy || !ready}>
+    {!selected.length && <p className="essential-note">No recipients selected. No email is needed for normal or unchanged operations. Change the action in Risk to recalculate affected staff.</p>}
+    <form onSubmit={event => { event.preventDefault(); onSave(event.nativeEvent.submitter?.value || 'PENDING') }}><fieldset disabled={busy || !ready || submitted}>
       <label>Subject<input maxLength="240" required value={form.draft_subject} onChange={event => onEdit('draft_subject', event.target.value)} /></label>
       <label>Message<textarea className="message-input" rows="9" maxLength="20000" required value={form.draft_body} onChange={event => onEdit('draft_body', event.target.value)} /></label>
       {needsEssential && <label className="check-notice"><input type="checkbox" checked={essential} onChange={event => onEssential(event.target.checked)} />I have confirmed instructions for the selected essential staff.</label>}
       <div className="message-actions"><button className="primary" type="submit" value="APPROVED" disabled={needsEssential && !essential}>Approve message</button><button type="submit" value="PENDING">Save draft</button>
-        <button type="button" disabled={dirty} onClick={onDownload}>Download saved message ↓</button><button className="text-button danger" type="submit" value="REJECTED">Reject</button></div>
-    </fieldset></form><p className="help" role="status">{dirty ? 'Unsaved changes · save before downloading.' : `Saved · ${label(detail.manager_status)}`}</p>
+        <button className="text-button danger" type="submit" value="REJECTED">Reject</button></div>
+    </fieldset></form>
+    <div className="message-actions"><button className="primary" disabled={busy || dirty || !ready || !email.ready || !selected.length || detail.manager_status !== 'APPROVED' || Boolean(submitted)} onClick={onSend}>{submitted ? 'Email submitted' : 'Send approved email'}</button>
+      <button disabled={busy || dirty} onClick={onDownload}>Download saved message ↓</button></div>
+    <p className="help" role="status">{dirty ? 'Unsaved changes · save before downloading.' : `Saved · ${label(detail.manager_status)}`}</p>
   </>
 }
 
@@ -338,6 +346,7 @@ function DecisionDetails({ id, onDirtyChange, onNavigate }) {
   const [step, setStep] = useState(0)
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
+  const [email, setEmail] = useState({ ready: false, message: 'Checking email setup…' })
   const stepPanel = useRef(null)
   function apply(value) {
     setDetail(value); setRows(value.recipients)
@@ -350,6 +359,7 @@ function DecisionDetails({ id, onDirtyChange, onNavigate }) {
     api(`/decisions/${id}`).then(value => { if (active) { apply(value); setStep(value.manager_status === 'PENDING' ? 0 : 2) } }).catch(error => { if (active) setError(error.message) })
     return () => { active = false }
   }, [id])
+  useEffect(() => { api('/email-status').then(setEmail).catch(() => setEmail({ ready: false, message: 'Email setup could not be checked.' })) }, [])
   useEffect(() => { onDirtyChange(dirty); return () => onDirtyChange(false) }, [dirty, onDirtyChange])
   useEffect(() => { stepPanel.current?.focus() }, [step, detail?.id])
   async function preview(next, posture = form.posture) {
@@ -363,6 +373,22 @@ function DecisionDetails({ id, onDirtyChange, onNavigate }) {
   function toggle(empId, included) {
     preview({ ...selection, include_ids: included ? [...new Set([...selection.include_ids, empId])] : selection.include_ids.filter(value => value !== empId),
       exclude_ids: included ? selection.exclude_ids.filter(value => value !== empId) : [...new Set([...selection.exclude_ids, empId])] })
+  }
+  function changePosture(posture) {
+    const action = posture.replaceAll('_', ' ')
+    setForm(current => ({ ...current, posture,
+      draft_subject: current.draft_subject.replace(current.posture.replaceAll('_', ' '), action),
+      draft_body: current.draft_body.replace(/^Recommended action:.*$/m, `Recommended action: ${action}`) }))
+    setDirty(true); setNotice('')
+    preview(audienceDefault(), posture)
+  }
+  async function send() {
+    setBusy(true); setError(''); setNotice('')
+    try {
+      const delivery = await api(`/decisions/${id}/send`, { method: 'POST' })
+      apply(await api(`/decisions/${id}`))
+      setNotice(delivery.status === 'ACCEPTED' ? 'Email accepted by the provider.' : delivery.status === 'UNKNOWN' ? 'Delivery outcome is uncertain. Check the provider; automatic retry is blocked.' : 'Email was not fully accepted. Check delivery status.')
+    } catch (error) { setError(error.message) } finally { setBusy(false) }
   }
   function edit(key, value) { setForm(current => ({ ...current, [key]: value })); setDirty(true); setNotice('') }
   function changeStep(next) { setStep(next); if (next > 0) preview(selection) }
@@ -391,9 +417,9 @@ function DecisionDetails({ id, onDirtyChange, onNavigate }) {
     <nav className="review-steps" aria-label="Message review steps">{['Risk', 'Recipients', 'Message'].map((name, index) => <button key={name} disabled={busy} aria-current={step === index ? 'step' : undefined} onClick={() => changeStep(index)}><span>{index + 1}</span>{name}</button>)}</nav>
     <ErrorMessage>{error}</ErrorMessage>{notice && <div className="notice success" role="status">{notice}</div>}
     <section className="card review-panel" ref={stepPanel} tabIndex={-1} aria-busy={busy} aria-label={`${['Risk', 'Recipients', 'Message'][step]} review`}>
-      {step === 0 && <RiskStep detail={detail} form={form} busy={busy} onEdit={edit} timezone={zone} onPosture={posture => { edit('posture', posture); preview({ scope: selection.scope, include_ids: [], exclude_ids: [] }, posture) }} />}
+      {step === 0 && <RiskStep detail={detail} form={form} busy={busy} onEdit={edit} timezone={zone} onPosture={changePosture} />}
       {step === 1 && <RecipientStep rows={rows} selection={selection} busy={busy} detail={detail} timezone={zone} onPreview={preview} onToggle={toggle} />}
-      {step === 2 && <MessageStep detail={detail} form={form} rows={rows} busy={busy} dirty={dirty} ready={ready} essential={essential} onEssential={setEssential} onEdit={edit} onSave={save} onDownload={download} />}
+      {step === 2 && <MessageStep detail={detail} form={form} rows={rows} busy={busy} dirty={dirty} ready={ready} essential={essential} onEssential={setEssential} onEdit={edit} onSave={save} onDownload={download} email={email} onSend={send} />}
       <div className="step-actions">{step > 0 ? <button disabled={busy} onClick={() => changeStep(step - 1)}>← {step === 1 ? 'Risk' : 'Recipients'}</button> : <span className="help">You choose the final action.</span>}
         {step < 2 && <button className="primary" disabled={busy || !ready} onClick={() => changeStep(step + 1)}>{busy ? 'Updating recipients…' : `Continue to ${step === 0 ? 'recipients' : 'message'} →`}</button>}</div>
     </section><ReviewHistory detail={detail} timezone={zone} />
@@ -432,7 +458,7 @@ export default function App() {
   }, [dirty])
   if (!loggedIn) return <Login onLogin={() => setLoggedIn(true)} />
   return <><header className="app-header"><a className="brand" href="#" onClick={onNavigate}><span className="brand-mark">F</span>Facility Operations</a>
-    <div className="inline-actions"><span className="draft-mode">Drafts only · email off</span><span className="manager-name">{sessionStorage.getItem('facility_manager')}</span><button className="small-button" onClick={logout}>Sign out</button></div></header>
+    <div className="inline-actions"><span className="draft-mode">Manager approval required</span><span className="manager-name">{sessionStorage.getItem('facility_manager')}</span><button className="small-button" onClick={logout}>Sign out</button></div></header>
     {decisionId ? <DecisionDetails key={decisionId} id={decisionId} onDirtyChange={onDirtyChange} onNavigate={onNavigate} /> : <Dashboard />}
     <footer>Manager-reviewed recommendations · Demo policy · Not an emergency warning service</footer></>
 }

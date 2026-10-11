@@ -14,6 +14,7 @@ from app import agent, tools
 from app.db import connect, utc_now
 from app.drafts import prepare_message
 from app.models import Recommendation
+from app.notification_rules import notification_rule, suppress_recipients
 from app.recipients import select_recipients
 from app.thresholds import policy_context, timestamp
 
@@ -113,6 +114,9 @@ def save_decision(db: sqlite3.Connection, location: dict, result: Recommendation
         recipients = select_recipients(db, location, result.affected_start.isoformat(),
                                       result.affected_end.isoformat(), result.posture,
                                       shift_id=group.get("shift_id") if group else None, impact_windows=windows)
+    notification = notification_rule(location, result.posture, result.affected_start.isoformat(), result.affected_end.isoformat())
+    if not notification["required"]:
+        recipients = suppress_recipients(recipients, notification["reason"])
     manager = db.execute("SELECT * FROM users WHERE location_id = ? AND is_manager = 1 ORDER BY emp_id LIMIT 1",
                          (location["id"],)).fetchone()
     draft = result.model_dump(mode="json")
@@ -124,7 +128,8 @@ def save_decision(db: sqlite3.Connection, location: dict, result: Recommendation
     alternatives = {"uncertainty": result.uncertainty, "what_would_change": result.what_would_change,
                     "warnings": context["warnings"], "policy_version": context["policy_version"],
                     "confidence_note": "Qualitative model estimate; not a calibrated probability.",
-                    "material_change": changed, "manager_alert": "In-app review only; email delivery disabled.",
+                    "material_change": changed, "notification": notification,
+                    "manager_alert": "In-app review; employee email requires explicit manager approval and send.",
                     "original_recommendation": result.model_dump(mode="json"),
                     "facility_snapshot": location, "inputs": signals,
                     "selection_windows": windows,

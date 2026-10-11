@@ -14,7 +14,7 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import ValidationError
 
 from app import models
-from app import evaluator, review, tools
+from app import email_delivery, evaluator, review, tools
 from app.auth import issue_token, read_token
 from app.db import connect, database_path, initialize, utc_now
 from app.scheduler import start_scheduler
@@ -311,6 +311,18 @@ def review_recommendation(decision_id: RouteID, body: models.ReviewRequest, db: 
     """Approval prepares a message; it never sends notifications."""
     review.review_decision(db, decision_id, manager["emp_id"], body)
     return decision(decision_id, db, manager)
+
+
+@router.get("/email-status")
+def email_status(manager: ManagerSession) -> dict:
+    return email_delivery.email_status()
+
+
+@router.post("/decisions/{decision_id}/send", dependencies=[Depends(mutation_guard)])
+def send_message(decision_id: RouteID, db: DB, manager: ManagerSession) -> dict:
+    """Explicit send only; neither the scheduler nor agent calls this route."""
+    review.owned_decision(db, decision_id, manager['emp_id'])
+    return email_delivery.send_decision(db, decision_id, manager['emp_id'])
 
 
 app = create_app()
