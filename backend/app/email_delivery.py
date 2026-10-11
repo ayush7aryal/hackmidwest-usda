@@ -82,6 +82,7 @@ def email_status() -> dict:
     try:
         config = delivery_settings()
         return {"ready": True, "demo_redirect": bool(config["redirect"]),
+                "redirect_address": config['redirect'], "sender": config['sender'],
                 "provider": config['provider'],
                 "message": "Demo email goes to the configured test inbox." if config["redirect"] else "Email provider configured; connection is checked on send."}
     except (ValueError, TypeError):

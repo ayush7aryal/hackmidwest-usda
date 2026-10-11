@@ -72,7 +72,7 @@ beforeEach(() => {
     const body = options.body ? JSON.parse(options.body) : undefined
     requests.push({ path, method: options.method || 'GET', body })
     if (path === '/api/me') return response({ emp_id: 1001, name: 'Synthetic Manager', email: 'manager@example.com', location_id: 1 })
-    if (path === '/api/email-status') return response({ ready: emailReady, provider: 'sendgrid', demo_redirect: true })
+    if (path === '/api/email-status') return response({ ready: emailReady, provider: 'sendgrid', demo_redirect: true, redirect_address: 'demo@gmail.com', sender: 'sender@example.com' })
     if (path === '/api/locations' && !body) return response([fixture.office])
     if (path === '/api/locations' && options.method === 'POST') { fixture.office = { ...fixture.office, ...body }; fixture.week = null; return response(fixture.office) }
     if (String(path).startsWith('https://geocoding-api.open-meteo.com/')) return response({ results: [{ id: 1, name: 'Panama City Beach', admin1: 'Florida', country: 'United States', latitude: 30.1766, longitude: -85.8055, timezone: 'America/Chicago' }] })
@@ -82,6 +82,9 @@ beforeEach(() => {
     if (path === '/api/locations/1/evaluate') return response({ state: 'COMPLETED', decision_id: 14 })
     if (path === '/api/locations/1/evaluate-week') return response(failWeek ? { state: 'INSUFFICIENT_DATA', message: 'Synthetic model outage', days: [] } : fixture.week)
     if (path === '/api/decisions/14' && !body) return response(fixture.decision)
+    if (path === '/api/decisions/14/delivery-status') return response({ ...fixture.decision.delivery, activity: {
+      available: true, message: 'Mail-server delivery does not confirm inbox placement.',
+      receipts: [{ to_email: 'demo@gmail.com', status: fixture.activityStatus || 'delivered' }] } })
     if (path === '/api/decisions/14/recipients') return failPreview ? response({ detail: 'Synthetic recipient outage' }, 503) : response(previewRows(body))
     if (path === '/api/decisions/14/send') {
       fixture.decision = { ...fixture.decision, sent_at: sendStatus === 'ACCEPTED' ? '2026-10-10T20:00:00Z' : null, delivery: { status: sendStatus, provider: 'sendgrid' } }
@@ -613,4 +616,42 @@ test('refresh failure retains the edited message and expired assessment', async 
   assert.match(document.querySelector('[role=alert]').textContent, /current data unavailable/)
   assert.equal(document.querySelector('.message-input').value, 'Keep these manager edits on failure.')
   assert.equal(requests.filter(item => item.path.endsWith('/send')).length, 0)
+})
+
+test('delivery check shows actual destination and preserves unsaved manager edits without sending', async () => {
+  fixture.decision.manager_status = 'APPROVED'
+  fixture.decision.sent_at = '2026-10-10T20:00:00Z'
+  fixture.decision.delivery = { status: 'ACCEPTED', provider: 'sendgrid', targets: ['demo@gmail.com'], demo_redirect: true }
+  await mount('#decision/14')
+  assert.match(document.querySelector('.review-panel').textContent, /all selected employee messages go only to demo@gmail.com/)
+  assert.match(document.querySelector('.review-panel').textContent, /inbox delivery unconfirmed/)
+  await change(document.querySelector('.message-input'), 'Unsaved manager wording stays here.')
+  await click(button('Check delivery status'))
+  assert.match(document.querySelector('.review-panel').textContent, /1 of 1 delivered to recipient mail servers/)
+  assert.match(document.querySelector('.review-panel').textContent, /demo@gmail.com · Delivered to mail server/)
+  assert.equal(document.querySelector('.message-input').value, 'Unsaved manager wording stays here.')
+  assert.equal(requests.filter(item => /\/(review|send)$/.test(item.path)).length, 0)
+})
+
+test('dashboard picks up saved scheduled status without a page reload', async context => {
+  const callbacks = []
+  context.mock.method(globalThis, 'setInterval', (callback, interval) => { if (interval === 60000) callbacks.push(callback); return 123 })
+  await mount()
+  fixture.office.last_checked_at = fixture.decision.evaluated_at
+  fixture.office.status = 'TELEWORK'
+  await act(async () => { for (const callback of callbacks) callback(); await tick() })
+  assert.match(document.querySelector('.overview-card').textContent, /Work remotely/)
+  assert(document.querySelector('.daily-summary a'))
+})
+
+test('provider rejection after acceptance is visible without expanding delivery details', async () => {
+  fixture.decision.manager_status = 'APPROVED'
+  fixture.decision.sent_at = '2026-10-10T20:00:00Z'
+  fixture.decision.delivery = { status: 'ACCEPTED', provider: 'sendgrid', targets: ['demo@gmail.com'] }
+  fixture.activityStatus = 'not_delivered'
+  await mount('#decision/14'); await click(button('Check delivery status'))
+  const notice = [...document.querySelectorAll('.review-panel p')].find(element => element.textContent.startsWith('Employee email:'))
+  assert.match(notice.textContent, /1 not delivered/)
+  assert(outsideClosedDetails(notice))
+  assert.equal(requests.filter(item => /\/(review|send)$/.test(item.path)).length, 0)
 })

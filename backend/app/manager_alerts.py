@@ -10,7 +10,7 @@ from app.email_delivery import delivery_message, delivery_outcome, delivery_sett
 from app.thresholds import timestamp
 
 
-def review_template(row: dict, location: dict, managers: list[dict]) -> dict:
+def review_template(row: dict, location: dict, managers: list[dict], scheduled: bool = False) -> dict:
     """Use saved advice and the facility's local timezone in the review request."""
     base = os.environ.get('APP_BASE_URL', 'http://localhost:8080').strip().rstrip('/')
     parsed = urlsplit(base)
@@ -23,10 +23,15 @@ def review_template(row: dict, location: dict, managers: list[dict]) -> dict:
     accounts = '\n'.join(f"- {m['name']} | Manager ID (login): {m['emp_id']} | {m['email']}" for m in managers)
     url = f"{base}/#decision/{row['id']}"
     posture = row['posture'].replace('_', ' ')
-    return {'subject': f"Please review: {location['name']} — NORMAL → {posture}",
+    previous = location['status'].replace('_', ' ')
+    subject = (f"Scheduled update: {location['name']} — {posture}" if scheduled else
+               f"Please review: {location['name']} — {previous} → {posture}")
+    summary = (f"The scheduled check is complete. Previous status: {previous}. Recommended status: {posture}." if scheduled else
+               f"{location['name']} (facility {location['id']}) has changed from {previous} to {posture}.")
+    return {'subject': subject,
             'to': [m['email'] for m in managers], 'managers': managers, 'dashboard_url': url,
             'body': f"Hello {names},\n\n"
-                    f"{location['name']} (facility {location['id']}) has changed from NORMAL to {posture}.\n"
+                    f"{summary}\n"
                     f"This is an AI-assisted recommendation awaiting your decision.\n\n"
                     f"Affected window: {start} – {end}\n"
                     f"Evaluated at: {row['evaluated_at']}\n\n"
@@ -46,10 +51,11 @@ def store_alert(db, decision_id: int, alternatives: dict, alert: dict) -> None:
                (json.dumps(alternatives), alert.get('accepted_at'), decision_id))
 
 
-def prepare_alert(db, row: dict, location: dict) -> tuple[dict, tuple | None]:
+def prepare_alert(db, row: dict, location: dict, scheduled: bool = False) -> tuple[dict, tuple | None]:
     """Check the exact transition and construct a manager-only delivery."""
     alert = {'status': 'SUPPRESSED', 'reason': 'No NORMAL-to-disruption status change.'}
-    if location['status'] != 'NORMAL' or row['posture'] == 'NORMAL':
+    summary = scheduled and os.environ.get('MANAGER_SCHEDULED_UPDATES_ENABLED', 'false').lower() == 'true'
+    if not summary and (location['status'] != 'NORMAL' or row['posture'] == 'NORMAL'):
         return alert, None
     alert = {'status': 'FAILED'}
     managers = [dict(m) for m in db.execute(
@@ -58,7 +64,8 @@ def prepare_alert(db, row: dict, location: dict) -> tuple[dict, tuple | None]:
     try:
         if not managers:
             raise ValueError('No manager is assigned to this facility')
-        alert = {'status': 'DISABLED', 'template': review_template(row, location, managers)}
+        alert = {'status': 'DISABLED', 'scheduled': scheduled,
+                 'template': review_template(row, location, managers, scheduled=summary)}
         if os.environ.get('MANAGER_ALERTS_ENABLED', 'false').lower() != 'true':
             return alert, None
         config = delivery_settings() | {'redirect': None}  # Always notify the assigned managers.
@@ -72,7 +79,7 @@ def prepare_alert(db, row: dict, location: dict) -> tuple[dict, tuple | None]:
     return alert, (config, message, targets)
 
 
-def notify_manager(db, decision_id: int) -> dict:
+def notify_manager(db, decision_id: int, scheduled: bool = False) -> dict:
     """Claim once after a committed NORMAL-to-disruption evaluation, then submit."""
     with db:
         db.execute('BEGIN IMMEDIATE')
@@ -81,7 +88,8 @@ def notify_manager(db, decision_id: int) -> dict:
         previous = alternatives.get('manager_alert')
         if isinstance(previous, dict):
             return previous
-        alert, submission = prepare_alert(db, row, alternatives['facility_snapshot'])
+        alternatives['evaluation_origin'] = 'scheduled' if scheduled else 'manual'
+        alert, submission = prepare_alert(db, row, alternatives['facility_snapshot'], scheduled=scheduled)
         store_alert(db, decision_id, alternatives, alert)
     if submission is None:
         return alert

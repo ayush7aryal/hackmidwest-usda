@@ -64,7 +64,8 @@ def weather_alerts_changed(db: sqlite3.Connection, location_id: int, weather: di
     return old_content != new_content
 
 
-def evaluate(path: str, location_id: int, manager_id: int | None = None, weekly: bool = False) -> dict:
+def evaluate(path: str, location_id: int, manager_id: int | None = None, weekly: bool = False,
+             scheduled: bool = False) -> dict:
     """Never mutate last known posture after source/model failure or lost ownership."""
     with exclusive_operation():
         db = connect(path)
@@ -80,7 +81,7 @@ def evaluate(path: str, location_id: int, manager_id: int | None = None, weekly:
             if weekly:
                 from app.weekly import run_weekly_evaluation
                 return run_weekly_evaluation(db, location)
-            return run_evaluation(db, location)
+            return run_evaluation(db, location, scheduled=scheduled)
         except ValidationError:
             logger.warning("Facility %s: structured recommendation validation failed", location_id)
             return {"state": "INSUFFICIENT_DATA", "message": "Model returned invalid structured advice; retry evaluation."}
@@ -94,14 +95,14 @@ def evaluate(path: str, location_id: int, manager_id: int | None = None, weekly:
             db.close()
 
 
-def run_evaluation(db: sqlite3.Connection, location: dict) -> dict:
+def run_evaluation(db: sqlite3.Connection, location: dict, scheduled: bool = False) -> dict:
     """Retain actual compact inputs and original advice for later manager edits."""
     signals = tools.fetch_signals(location["latitude"], location["longitude"])
     context = policy_context(location, signals, datetime.now(UTC))
     result = agent.validate_recommendation(agent.recommend(location, context), context)
     with db:
         decision_id = save_decision(db, location, result, signals, context, update_location=True)
-    alert = notify_manager(db, decision_id)
+    alert = notify_manager(db, decision_id, scheduled=scheduled)
     message = 'Recommendation saved for manager review. No employee emails were sent.'
     if alert['status'] == 'ACCEPTED':
         message += ' Manager review email accepted by the email provider.'

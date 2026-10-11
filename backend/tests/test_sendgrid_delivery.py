@@ -19,14 +19,15 @@ def sendgrid_provider(monkeypatch):
                        'SENDGRID_API_KEY': 'synthetic-test-key', 'EMAIL_FROM': 'sender@example.com',
                        'DEMO_EMAIL_TO': 'owner@gmail.com', 'SMTP_HOST': '', 'SMTP_PASSWORD': ''}.items():
         monkeypatch.setenv(key, value)
-    state = {'calls': [], 'failure': None, 'status': 202}
+    state = {'calls': [], 'failure': None, 'status': 202, 'activity': []}
 
     def request(client, opener, request, timeout=None):
         state['calls'].append({'url': request.full_url, 'method': request.get_method(),
-                               'headers': request.headers, 'body': json.loads(request.data), 'timeout': timeout})
+                               'headers': request.headers, 'body': json.loads(request.data) if request.data else None, 'timeout': timeout})
         if state['failure']:
             raise state['failure']
-        return SimpleNamespace(getcode=lambda: state['status'], read=lambda: b'',
+        return SimpleNamespace(getcode=lambda: 200 if request.get_method() == 'GET' else state['status'],
+                               read=lambda: json.dumps({'messages': state['activity']}).encode() if request.get_method() == 'GET' else b'',
                                info=lambda: {'X-Message-Id': 'synthetic-provider-id'})
 
     def no_smtp(*args):

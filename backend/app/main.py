@@ -14,7 +14,7 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import ValidationError
 
 from app import models
-from app import email_delivery, evaluator, review, tools
+from app import delivery_status, email_delivery, evaluator, review, tools
 from app.auth import issue_token, read_token
 from app.db import connect, database_path, initialize, utc_now
 from app.scheduler import start_scheduler
@@ -329,6 +329,12 @@ def send_message(decision_id: RouteID, db: DB, manager: ManagerSession) -> dict:
     """Explicit send only; neither the scheduler nor agent calls this route."""
     review.owned_decision(db, decision_id, manager['emp_id'])
     return email_delivery.send_decision(db, decision_id, manager['emp_id'])
+
+
+@router.post('/decisions/{decision_id}/delivery-status')
+def check_delivery(decision_id: RouteID, db: DB, manager: ManagerSession) -> dict:
+    """Only the assigned manager can inspect this message's provider activity."""
+    return delivery_status.refresh_delivery(db, decision_id, manager['emp_id'])
 
 
 app = create_app()

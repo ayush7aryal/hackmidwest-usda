@@ -171,6 +171,11 @@ function Dashboard() {
     } catch (error) { setError(error.message) } finally { setLoading(false) }
   }
   useEffect(() => { load() }, [])
+  useEffect(() => {
+    if (busy || form) return
+    const timer = setInterval(() => load(), 60000)
+    return () => clearInterval(timer)
+  }, [busy, form])
   useEffect(() => { setAlertSnapshot(null) }, [facility?.id, facility?.latitude, facility?.longitude])
   useEffect(() => {
     if (!facility) return
@@ -330,13 +335,31 @@ function RiskStep({ detail, form, busy, onEdit, onPosture, timezone }) {
   </>
 }
 
-function MessageStep({ detail, form, rows, busy, dirty, ready, essential, email, onEssential, onEdit, onSave, onDownload, onRefresh, refreshing }) {
+function DeliveryStatus({ delivery, busy, onCheck }) {
+  if (!delivery?.status) return null
+  const activity = delivery.activity
+  const receipts = new Map((activity?.receipts || []).map(receipt => [receipt.to_email, receipt]))
+  const delivered = (delivery.targets || []).filter(target => receipts.get(target)?.status === 'delivered').length
+  const failed = (delivery.targets || []).filter(target => receipts.get(target)?.status === 'not_delivered').length
+  return <div className="help" role="status">
+    <p>Employee email: {failed ? `${failed} not delivered; ${delivered} delivered to recipient mail servers.` : delivered ? `${delivered} of ${delivery.targets.length} delivered to recipient mail servers.` : delivery.status === 'ACCEPTED' ? 'Accepted by provider; inbox delivery unconfirmed.' : label(delivery.status)}</p>
+    {!!delivery.targets?.length && <details className="disclosure"><summary>Delivery destinations · {delivery.targets.length}{delivery.demo_redirect ? ' · demo redirect' : ''}</summary>
+      {delivery.targets.map(target => <p key={target}>{target} · {receipts.get(target)?.status === 'delivered' ? 'Delivered to mail server' : receipts.get(target)?.status === 'not_delivered' ? 'Not delivered' : 'Awaiting delivery confirmation'}</p>)}</details>}
+    {activity && <p>{activity.message}</p>}
+    {['UNKNOWN', 'PARTIAL', 'IN_PROGRESS'].includes(delivery.status) && <p>Check provider activity before any further action.</p>}
+    {delivery.provider === 'sendgrid' && ['ACCEPTED', 'PARTIAL'].includes(delivery.status) && <button type="button" className="text-button" disabled={busy} onClick={onCheck}>Check delivery status</button>}
+  </div>
+}
+
+function MessageStep({ detail, form, rows, busy, dirty, ready, essential, email, onEssential, onEdit, onSave, onDownload, onRefresh, refreshing, onCheckDelivery }) {
   const selected = rows.filter(row => row.included)
   const needsEssential = selected.some(row => row.requires_manager_review)
   const submitted = Boolean(detail.sent_at || ['PARTIAL', 'ACCEPTED'].includes(detail.delivery?.status))
   const pending = ['IN_PROGRESS', 'UNKNOWN'].includes(detail.delivery?.status)
   return <><p className="eyebrow">STEP 3 OF 3</p><div className="section-head"><h2>Prepare your message</h2><Badge>{selected.length} recipient{selected.length === 1 ? '' : 's'}</Badge></div>
     <p className="help">Review the message, then approve and send it to the selected affected employees.</p>
+    {email?.demo_redirect && <p className="essential-note">Demo redirect is enabled: all selected employee messages go only to {email.redirect_address || 'the configured test inbox'}.</p>}
+    {email?.sender && <p className="help">From: {email.sender}</p>}
     {impactExpired(detail) && <div className="essential-note" role="status">This assessment's impact window has ended. Refresh for current conditions, or approve a clearly labeled historical demo email.
       <div><button type="button" className="small-button" disabled={busy} onClick={onRefresh}>{refreshing ? 'Refreshing assessment…' : 'Refresh assessment'}</button></div></div>}
     {refreshing && <EvaluationLoader weekly={false} />}
@@ -350,9 +373,9 @@ function MessageStep({ detail, form, rows, busy, dirty, ready, essential, email,
         <button className="text-button danger" type="submit" value="REJECTED" disabled={submitted}>Reject</button></div>
     </fieldset></form>
     <div className="message-actions secondary-actions"><button className="text-button" disabled={busy || dirty} onClick={onDownload}>Download saved message ↓</button></div>
-    {submitted && <p className="help">Already sent. You can edit and send again after confirmation.</p>}
+    {submitted && <p className="help">Previously submitted. You can edit and send again after confirmation.</p>}
     {email && !email.ready && <p className="help">Email sending is unavailable. You can save or download the message.</p>}
-    {detail.delivery?.status && <p className="help" role="status">Employee email: {detail.delivery.status === 'ACCEPTED' ? 'Accepted by provider for delivery.' : label(detail.delivery.status)}{['UNKNOWN', 'PARTIAL', 'IN_PROGRESS'].includes(detail.delivery.status) && ' · Check provider activity before any further action.'}</p>}
+    <DeliveryStatus delivery={detail.delivery} busy={busy} onCheck={onCheckDelivery} />
     <p className="help" role="status">{dirty ? 'Unsaved changes · save before downloading.' : `Saved · ${label(detail.manager_status)}`}</p>
   </>
 }
@@ -465,6 +488,13 @@ function DecisionDetails({ id, onDirtyChange, onNavigate }) {
   async function refreshDelivery() {
     try { apply(await api(`/decisions/${id}`)) } catch { /* The server also blocks duplicate submissions. */ }
   }
+  async function checkDelivery() {
+    setBusy(true); setError('')
+    try {
+      const delivery = await api(`/decisions/${id}/delivery-status`, { method: 'POST' })
+      setDetail(current => ({ ...current, delivery }))
+    } catch (error) { setError(error.message) } finally { setBusy(false) }
+  }
   function download() {
     const recipients = detail.recipients.filter(row => row.included).map(row => row.email)
     const blob = new Blob([`${recipients.length ? `To: ${recipients.join(', ')}\n` : ''}Subject: ${detail.draft_subject}\n\n${detail.draft_body}`], { type: 'text/plain;charset=utf-8' })
@@ -483,7 +513,7 @@ function DecisionDetails({ id, onDirtyChange, onNavigate }) {
     <section className="card review-panel" ref={stepPanel} tabIndex={-1} aria-busy={busy} aria-label={`${['Risk', 'Recipients', 'Message'][step]} review`}>
       {step === 0 && <RiskStep detail={detail} form={form} busy={busy} onEdit={edit} timezone={zone} onPosture={changePosture} />}
       {step === 1 && <RecipientStep rows={rows} selection={selection} busy={busy} detail={detail} timezone={zone} onPreview={preview} onToggle={toggle} />}
-      {step === 2 && <MessageStep detail={detail} form={form} rows={rows} busy={busy} dirty={dirty} ready={ready} essential={essential} email={email} onEssential={setEssential} onEdit={edit} onSave={save} onDownload={download} onRefresh={refreshAssessment} refreshing={refreshing} />}
+      {step === 2 && <MessageStep detail={detail} form={form} rows={rows} busy={busy} dirty={dirty} ready={ready} essential={essential} email={email} onEssential={setEssential} onEdit={edit} onSave={save} onDownload={download} onRefresh={refreshAssessment} refreshing={refreshing} onCheckDelivery={checkDelivery} />}
       <div className="step-actions">{step > 0 ? <button disabled={busy} onClick={() => changeStep(step - 1)}>← {step === 1 ? 'Risk' : 'Recipients'}</button> : <span className="help">You choose the final action.</span>}
         {step < 2 && <button className="primary" disabled={busy || !ready} onClick={() => changeStep(step + 1)}>{busy ? 'Updating recipients…' : `Continue to ${step === 0 ? 'recipients' : 'message'} →`}</button>}</div>
     </section><ReviewHistory detail={detail} timezone={zone} />

@@ -170,6 +170,26 @@ def test_scheduled_check_uses_assigned_managers_and_never_employee_send(db_path,
         assert db.execute('SELECT COUNT(*) FROM decisions WHERE manager_alert_sent_at IS NOT NULL').fetchone()[0] == 2
 
 
+def test_opted_in_scheduled_updates_include_unchanged_and_normal(db_path, evaluation_sources, manager_provider, monkeypatch):
+    monkeypatch.setenv('MANAGER_SCHEDULED_UPDATES_ENABLED', 'true')
+    first = evaluator.evaluate(db_path, 1, scheduled=True)
+    second = evaluator.evaluate(db_path, 1, scheduled=True)
+    assert len(manager_provider['calls']) == 2
+    second_row = saved(db_path, second['decision_id'])
+    assert second_row['manager_alert']['status'] == 'ACCEPTED'
+    assert second_row['manager_alert']['scheduled'] is True
+    assert 'Scheduled update:' in second_row['manager_alert']['template']['subject']
+    assert 'Previous status: TELEWORK. Recommended status: TELEWORK.' in second_row['manager_alert']['template']['body']
+    assert not second_row['sent_at'] and second_row['manager_status'] == 'PENDING'
+    with closing(connect(db_path)) as db, db:
+        row = dict(db.execute('SELECT * FROM decisions WHERE id=?', (first['decision_id'],)).fetchone())
+        row.update(posture='NORMAL')
+        location = json.loads(row['alternatives_json'])['facility_snapshot'] | {'status': 'NORMAL'}
+        alert, submission = manager_alerts.prepare_alert(db, row, location, scheduled=True)
+    assert alert['status'] == 'IN_PROGRESS' and submission
+    assert 'Recommended status: NORMAL.' in alert['template']['body']
+
+
 def test_manager_identity_is_authenticated_and_current(client, headers, db_path):
     assert client.get('/api/me').status_code == 401
     with closing(connect(db_path)) as db, db:

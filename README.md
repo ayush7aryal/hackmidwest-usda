@@ -173,6 +173,12 @@ The current instance timed out connecting to Gmail ports 465 and 587. A Gmail
 App Password and working outbound SMTP are required before a real send can be
 verified. Request SMTP access from Akamai support; no extra server is required.
 
+Employee email delivery can be checked with **Check delivery status** in Message.
+The UI shows actual destinations, any demo redirect, and SendGrid delivery activity.
+HTTP 202 means accepted for delivery; mail-server delivery does not prove inbox
+placement. Activity lookup never resends email. Keep `DEMO_EMAIL_TO` empty to send
+to the selected employees' real demo Gmail aliases.
+
 Automatic NORMAL recommendations have no notification audience. Repeated
 non-normal recommendations keep affected on-site employees selected until their
 notification is actually submitted. A prior evaluation or manager review email
@@ -257,10 +263,14 @@ remain blocked without that confirmation.
 - Each decision retains original inputs, advice, recipients, draft and subsequent
   reviews in JSON. No extra audit or notification tables.
 - APScheduler checks every three hours (`EVALUATION_INTERVAL_HOURS=3`) with
-  `max_instances=1`, `coalesce=True`, one process lock and one Uvicorn worker. Startup checks are opt-in. Material changes create
-  in-app review flags. Daily NORMAL-to-disruption transitions also email assigned
-  managers when enabled. Repeated non-normal checks and returns to NORMAL do not
-  email managers. Seven-day planning prepares future shift drafts; it does not
+  `max_instances=1`, `coalesce=True`, one process lock and one Uvicorn worker.
+  A minute tick evaluates only facilities whose saved last check is at least three
+  hours old, or missing after creation/coordinate edits. Restarts catch up overdue
+  work; busy checks retry on the next tick. Forced fresh startup checks are opt-in.
+  Daily NORMAL-to-disruption transitions email assigned managers when enabled.
+  `MANAGER_SCHEDULED_UPDATES_ENABLED=true` also sends manager summaries after each
+  completed scheduled refresh, including unchanged and NORMAL statuses.
+  Seven-day planning prepares future shift drafts; it does not
   change current status or automatically email anyone. The scheduler never sends
   employee emails.
 

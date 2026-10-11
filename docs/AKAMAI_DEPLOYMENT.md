@@ -33,8 +33,9 @@ but this MVP follows the blueprint's SQLite requirement. See Akamai's
 - The migrated database initially contained 7 facilities, 26 users, 3 shifts and
   91 decisions. Existing data was imported before startup, without re-seeding.
 - SendGrid is configured with `EMAIL_ENABLED=true`, `MANAGER_ALERTS_ENABLED=true`
-  and `APP_BASE_URL=https://172.236.119.150`. Manager alerts are automatic only
-  for daily NORMAL-to-disruption transitions; employee sends require the manager
+  and `APP_BASE_URL=https://172.236.119.150`. Scheduled manager summaries are
+  enabled with `MANAGER_SCHEDULED_UPDATES_ENABLED=true`; manual daily checks also
+  alert on NORMAL-to-disruption transitions. Employee sends require the manager
   action in the dashboard. No historical pending/approved decision is auto-sent.
 - Daily facility checks run every three hours; the seven-day plan is refreshed
   from the manager UI. Added facilities are automatically included in scheduled
@@ -307,11 +308,31 @@ added facilities are included automatically on the next run. Source/model
 failures preserve the last known recommendation. The seven-day plan is refreshed
 with the manager's **Check next 7 days** button; scheduled checks update daily status.
 
-The first scheduled check runs three hours after the backend starts unless
-`EVALUATE_ON_STARTUP=true`. This is an interval from process startup, not fixed
-UTC clock times. Restarting resets the interval; keep the instance and containers
-running. Set `EVALUATION_INTERVAL_HOURS` to another positive whole number if
-needed. No host cron task or extra service is required.
+The scheduler checks saved `locations.last_checked_at` timestamps every minute.
+Only facilities due for their three-hour refresh contact the data/model services.
+Overdue, new and coordinate-edited facilities catch up after startup; restarting
+cannot postpone their checks. Busy operations retry on the next tick. Source or
+model failures retain the last good recommendation and remain due for retry.
+`EVALUATE_ON_STARTUP=true` additionally requests a fresh check even for current
+facilities. Keep one API worker; no host cron or extra service is required.
+
+Production enables `MANAGER_SCHEDULED_UPDATES_ENABLED=true`: each completed
+scheduled refresh emails its assigned managers a summary and dashboard link,
+including unchanged and NORMAL statuses. Manual daily checks retain the
+NORMAL-to-disruption alert rule. Employee emails still require manager approval.
+Weekly planning prepares dated drafts; it does not change the daily status.
+The open dashboard reloads saved daily status every minute. The development
+`.env` disables its local scheduler to avoid duplicate cloud/local manager emails;
+Akamai keeps `SCHEDULER_ENABLED=true`.
+
+Production uses `DEMO_EMAIL_TO=` so selected employees receive messages at their
+configured Gmail aliases. A nonempty value intentionally redirects every
+employee envelope to that single test inbox; the Message step shows this clearly.
+Use **Check delivery status** to query SendGrid activity for the exact submission
+and actual destinations. Provider acceptance is distinct from delivery to the
+recipient mail server, and neither confirms inbox placement. Check Gmail All Mail
+and Spam for the verified sender. The API key needs Email Activity read access;
+unavailable activity is shown without resending or falsely claiming delivery.
 
 ## Persistence, backup and updates
 

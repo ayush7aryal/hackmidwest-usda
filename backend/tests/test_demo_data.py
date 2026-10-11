@@ -72,6 +72,6 @@ def test_id_collision_rolls_back_entire_expansion(db_path):
 def test_scheduler_includes_every_added_demo_facility(db_path, monkeypatch):
     expand_demo(db_path)
     calls=[]
-    monkeypatch.setattr(scheduler, 'evaluate', lambda path, loc: calls.append(loc) or {'state':'COMPLETED'})
+    monkeypatch.setattr(scheduler, 'evaluate', lambda path, loc, **kwargs: calls.append(loc) or {'state':'COMPLETED'})
     scheduler.evaluate_all(db_path)
     assert calls == [1,2,51,52,53,54,55]
