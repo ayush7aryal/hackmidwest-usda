@@ -4,7 +4,7 @@ import FacilityMap from './FacilityMap.jsx'
 
 const POSTURES = ['NORMAL', 'DELAYED_OPENING', 'EARLY_DISMISSAL', 'TELEWORK', 'CLOSED']
 const LABELS = { NORMAL: 'Normal operations', DELAYED_OPENING: 'Delayed opening', EARLY_DISMISSAL: 'Early dismissal', TELEWORK: 'Work remotely', CLOSED: 'Closed', PENDING: 'Needs review', APPROVED: 'Approved', REJECTED: 'Rejected' }
-const REASONS = { scheduled_on_site: 'Scheduled on-site', manager_selected: 'Selected by manager', facility_wide: 'Facility-wide notice', not_scheduled: 'Outside affected hours', already_remote: 'Already remote', manager: 'Manager', no_disruption: 'No schedule change', normal_operations: 'Normal operations · no email needed', unchanged_operation: 'Unchanged action · no email needed', already_notified: 'Already notified for this window', invalid_shift: 'Schedule needs correction', manager_excluded: 'Excluded by manager' }
+const REASONS = { scheduled_on_site: 'Scheduled on-site', manager_selected: 'Selected by manager', facility_wide: 'Facility-wide notice', not_scheduled: 'Outside affected hours', already_remote: 'Already remote', manager: 'Manager', no_disruption: 'No schedule change', normal_operations: 'Normal operations · no notification needed', unchanged_operation: 'Unchanged action · no notification needed', already_notified: 'Already notified for this window', invalid_shift: 'Schedule needs correction', manager_excluded: 'Excluded by manager' }
 const label = value => LABELS[value] || value?.replaceAll('_', ' ') || '—'
 const decisionFromHash = () => window.location.hash.match(/^#decision\/(\d+)$/)?.[1] || null
 const audienceDefault = () => ({ scope: 'affected', include_ids: [], exclude_ids: [] })
@@ -102,7 +102,7 @@ function Login({ onLogin }) {
       <label>Password<input type="password" autoComplete="current-password" value={password} onChange={event => setPassword(event.target.value)} placeholder="Manager password" /></label>
       <details className="login-help"><summary>Local demo sign-in help</summary><p className="help">Use the configured manager password. Leave blank only if no password is configured.</p></details>
       <ErrorMessage>{error}</ErrorMessage><button className="primary full" disabled={busy}>{busy ? 'Signing in…' : 'Open dashboard →'}</button>
-    </form><p className="help login-foot">Synthetic employees · Email requires manager approval</p></section></main>
+    </form><p className="help login-foot">Synthetic employees · Manager-reviewed messages</p></section></main>
 }
 
 function FacilityForm({ facility, onSaved, onCancel }) {
@@ -303,15 +303,14 @@ function RiskStep({ detail, form, busy, onEdit, onPosture, timezone }) {
   </>
 }
 
-function MessageStep({ detail, form, rows, busy, dirty, ready, essential, onEssential, onEdit, onSave, onDownload, email, onSend }) {
+function MessageStep({ detail, form, rows, busy, dirty, ready, essential, onEssential, onEdit, onSave, onDownload }) {
   const selected = rows.filter(row => row.included)
   const needsEssential = selected.some(row => row.requires_manager_review)
   const submitted = detail.sent_at || ['IN_PROGRESS', 'UNKNOWN', 'PARTIAL', 'ACCEPTED'].includes(detail.delivery?.status)
   return <><p className="eyebrow">STEP 3 OF 3</p><div className="section-head"><h2>Prepare your message</h2><Badge>{selected.length} recipient{selected.length === 1 ? '' : 's'}</Badge></div>
-    <p className="help">{email.message}</p>
-    {detail.delivery && <p className="essential-note" role="status">Email: {label(detail.delivery.status)}{detail.delivery.status === 'ACCEPTED' ? ' by provider; inbox delivery is not confirmed.' : detail.delivery.status === 'UNKNOWN' ? ' · check the provider before retrying.' : ''}</p>}
+    <p className="help">Review the wording, approve your message and download it.</p>
     {form.posture !== detail.posture && <p className="essential-note">Your action changed. Update the message wording to match.</p>}
-    {!selected.length && <p className="essential-note">No recipients selected. No email is needed for normal or unchanged operations. Change the action in Risk to recalculate affected staff.</p>}
+    {!selected.length && <p className="essential-note">No recipients selected. Change the action in Risk to recalculate affected staff.</p>}
     <form onSubmit={event => { event.preventDefault(); onSave(event.nativeEvent.submitter?.value || 'PENDING') }}><fieldset disabled={busy || !ready || submitted}>
       <label>Subject<input maxLength="240" required value={form.draft_subject} onChange={event => onEdit('draft_subject', event.target.value)} /></label>
       <label>Message<textarea className="message-input" rows="9" maxLength="20000" required value={form.draft_body} onChange={event => onEdit('draft_body', event.target.value)} /></label>
@@ -319,8 +318,7 @@ function MessageStep({ detail, form, rows, busy, dirty, ready, essential, onEsse
       <div className="message-actions"><button className="primary" type="submit" value="APPROVED" disabled={needsEssential && !essential}>Approve message</button><button type="submit" value="PENDING">Save draft</button>
         <button className="text-button danger" type="submit" value="REJECTED">Reject</button></div>
     </fieldset></form>
-    <div className="message-actions"><button className="primary" disabled={busy || dirty || !ready || !email.ready || !selected.length || detail.manager_status !== 'APPROVED' || Boolean(submitted)} onClick={onSend}>{submitted ? 'Email submitted' : 'Send approved email'}</button>
-      <button disabled={busy || dirty} onClick={onDownload}>Download saved message ↓</button></div>
+    <div className="message-actions"><button disabled={busy || dirty} onClick={onDownload}>Download saved message ↓</button></div>
     <p className="help" role="status">{dirty ? 'Unsaved changes · save before downloading.' : `Saved · ${label(detail.manager_status)}`}</p>
   </>
 }
@@ -346,7 +344,6 @@ function DecisionDetails({ id, onDirtyChange, onNavigate }) {
   const [step, setStep] = useState(0)
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
-  const [email, setEmail] = useState({ ready: false, message: 'Checking email setup…' })
   const stepPanel = useRef(null)
   function apply(value) {
     setDetail(value); setRows(value.recipients)
@@ -359,7 +356,6 @@ function DecisionDetails({ id, onDirtyChange, onNavigate }) {
     api(`/decisions/${id}`).then(value => { if (active) { apply(value); setStep(value.manager_status === 'PENDING' ? 0 : 2) } }).catch(error => { if (active) setError(error.message) })
     return () => { active = false }
   }, [id])
-  useEffect(() => { api('/email-status').then(setEmail).catch(() => setEmail({ ready: false, message: 'Email setup could not be checked.' })) }, [])
   useEffect(() => { onDirtyChange(dirty); return () => onDirtyChange(false) }, [dirty, onDirtyChange])
   useEffect(() => { stepPanel.current?.focus() }, [step, detail?.id])
   async function preview(next, posture = form.posture) {
@@ -381,14 +377,6 @@ function DecisionDetails({ id, onDirtyChange, onNavigate }) {
       draft_body: current.draft_body.replace(/^Recommended action:.*$/m, `Recommended action: ${action}`) }))
     setDirty(true); setNotice('')
     preview(audienceDefault(), posture)
-  }
-  async function send() {
-    setBusy(true); setError(''); setNotice('')
-    try {
-      const delivery = await api(`/decisions/${id}/send`, { method: 'POST' })
-      apply(await api(`/decisions/${id}`))
-      setNotice(delivery.status === 'ACCEPTED' ? 'Email accepted by the provider.' : delivery.status === 'UNKNOWN' ? 'Delivery outcome is uncertain. Check the provider; automatic retry is blocked.' : 'Email was not fully accepted. Check delivery status.')
-    } catch (error) { setError(error.message) } finally { setBusy(false) }
   }
   function edit(key, value) { setForm(current => ({ ...current, [key]: value })); setDirty(true); setNotice('') }
   function changeStep(next) { setStep(next); if (next > 0) preview(selection) }
@@ -419,7 +407,7 @@ function DecisionDetails({ id, onDirtyChange, onNavigate }) {
     <section className="card review-panel" ref={stepPanel} tabIndex={-1} aria-busy={busy} aria-label={`${['Risk', 'Recipients', 'Message'][step]} review`}>
       {step === 0 && <RiskStep detail={detail} form={form} busy={busy} onEdit={edit} timezone={zone} onPosture={changePosture} />}
       {step === 1 && <RecipientStep rows={rows} selection={selection} busy={busy} detail={detail} timezone={zone} onPreview={preview} onToggle={toggle} />}
-      {step === 2 && <MessageStep detail={detail} form={form} rows={rows} busy={busy} dirty={dirty} ready={ready} essential={essential} onEssential={setEssential} onEdit={edit} onSave={save} onDownload={download} email={email} onSend={send} />}
+      {step === 2 && <MessageStep detail={detail} form={form} rows={rows} busy={busy} dirty={dirty} ready={ready} essential={essential} onEssential={setEssential} onEdit={edit} onSave={save} onDownload={download} />}
       <div className="step-actions">{step > 0 ? <button disabled={busy} onClick={() => changeStep(step - 1)}>← {step === 1 ? 'Risk' : 'Recipients'}</button> : <span className="help">You choose the final action.</span>}
         {step < 2 && <button className="primary" disabled={busy || !ready} onClick={() => changeStep(step + 1)}>{busy ? 'Updating recipients…' : `Continue to ${step === 0 ? 'recipients' : 'message'} →`}</button>}</div>
     </section><ReviewHistory detail={detail} timezone={zone} />

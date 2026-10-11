@@ -66,8 +66,6 @@ beforeEach(() => {
   globalThis.fetch = async (path, options = {}) => {
     const body = options.body ? JSON.parse(options.body) : undefined
     requests.push({ path, method: options.method || 'GET', body })
-    if (path === '/api/email-status') return response({ ready: true, demo_redirect: false, message: 'Synthetic provider ready.' })
-    if (path === '/api/decisions/14/send') { fixture.decision = { ...fixture.decision, sent_at: '2026-10-10T20:00:00Z', delivery: { status: 'ACCEPTED' } }; return response(fixture.decision.delivery) }
     if (path === '/api/locations' && !body) return response([fixture.office])
     if (path === '/api/locations' && options.method === 'POST') { fixture.office = { ...fixture.office, ...body }; fixture.week = null; return response(fixture.office) }
     if (String(path).startsWith('https://geocoding-api.open-meteo.com/')) return response({ results: [{ id: 1, name: 'Panama City Beach', admin1: 'Florida', country: 'United States', latitude: 30.1766, longitude: -85.8055, timezone: 'America/Chicago' }] })
@@ -383,22 +381,21 @@ test('normal operations leave recipients unchecked and a manager override resets
   assert(button('Selected (2)'))
   await click(button('Continue to message →'))
   assert.match(document.querySelector('.message-input').value, /Recommended action: CLOSED/)
-  assert.equal(button('Send approved email').disabled, true)
+  assert(![...document.querySelectorAll('button')].some(item => /send.*email/i.test(item.textContent)))
 })
 
-test('email requires a separate explicit send after approval and cannot be repeated', async () => {
+test('demo message flow approves and downloads without email controls or provider requests', async () => {
   await mount('#decision/14'); await click(button('Continue to recipients →')); await click(button('Continue to message →'))
-  assert.equal(button('Send approved email').disabled, true)
+  assert.doesNotMatch(document.querySelector('.review-panel').textContent, /SMTP|provider|send approved email|checking email/i)
   await click(document.querySelector('.check-notice input'))
   await click(button('Approve message'))
-  assert.equal(requests.filter(item => item.path.endsWith('/send')).length, 0)
-  assert.equal(button('Send approved email').disabled, false)
-  await click(button('Send approved email'))
-  assert.equal(requests.filter(item => item.path.endsWith('/send')).length, 1)
-  assert.equal(button('Email submitted').disabled, true)
-  assert.equal(document.querySelector('fieldset').disabled, true)
-  assert.match(document.querySelector('.review-panel').textContent, /inbox delivery is not confirmed/)
+  assert.equal(fixture.decision.manager_status, 'APPROVED')
+  assert.equal(requests.filter(item => item.path.endsWith('/send') || item.path.endsWith('/email-status')).length, 0)
+  assert(![...document.querySelectorAll('button')].some(item => /send.*email/i.test(item.textContent)))
   assert.equal(button('Download saved message ↓').disabled, false)
+  await click(button('Download saved message ↓'))
+  assert.equal(downloadName, 'decision-14-approved.txt')
+  assert(downloadBlob)
 })
 
 test('changing an action reselects a previously excluded affected employee', async () => {

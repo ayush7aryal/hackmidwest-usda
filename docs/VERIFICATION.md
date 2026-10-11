@@ -1,5 +1,13 @@
 # MVP verification — October 10, 2026
 
+Judging demo update: email setup/status notices and send controls were removed
+from the frontend. It no longer requests `/api/email-status` or `/send`.
+Message editing, approval, recipient filtering and download remain available.
+Email delivery is disabled in the local and Akamai demo configuration; the
+optional backend implementation and private credentials are retained for later.
+All **23 frontend DOM tests** and the production build passed after this change.
+Earlier email checks below describe the previous version.
+
 Five-office demo and explicit email update (October 10, Chicago time):
 
 - **235 backend tests** and **23 frontend DOM interaction tests** passed. The

@@ -3,9 +3,10 @@
 A hackathon MVP for manager-reviewed US office disruption advice: FastAPI,
 SQLite, one Strands agent, two live data tools, React/Vite, and two Docker
 containers. Built from [the blueprint](docs/HACKATHON_IMPLEMENTATION.md).
-**Employee email requires explicit manager approval and a separate send action.**
-Managers can prepare and download messages without configuring SMTP. Scheduled
-checks and the agent never send employee messages.
+**The current judging demo prepares, approves and downloads messages.**
+Email controls and provider setup notices are removed from the frontend, and
+delivery is disabled in the demo deployment. The optional SMTP backend is kept
+for later use. Scheduled checks and the agent never send employee messages.
 
 ## Run the complete application locally
 
@@ -66,9 +67,8 @@ no domain is required. Deployment details and operator commands are in the runbo
    approving. A failed recipient refresh blocks approval until retried.
 5. Save, approve or reject. Download the saved message with its recipient list.
    Approved message bodies and downloads omit draft/approval notices; review
-   status stays in the manager UI and audit record. **Send approved email** appears
-   separately and requires configured SMTP. Past
-   checks and decision records are expandable.
+   status stays in the manager UI and audit record. Past checks and decision
+   records are expandable.
 
 Urgent NWS instructions stay visible; advisory details, source notes, policy and
 confidence are available on demand. Missing coverage and outdated alerts remain
@@ -101,6 +101,10 @@ hours are same-day; impact windows can cross midnight. Matching uses actual loca
 dates and IANA timezone/DST offsets.
 
 ## Five-location demo and Gmail
+
+The current demo exposes message preparation, approval and download only. The
+SMTP settings below document the optional backend for later use; leave
+`EMAIL_ENABLED=false` during judging. There is no send button in the frontend.
 
 Run the additive demo command after building the current backend image:
 
@@ -169,7 +173,8 @@ on-site staff for this decision's date/shift/window. An explicit return-to-norma
 override can notify those staff too. Essential instructions still need confirmation;
 remote/off-shift staff require the explicit facility-wide audience.
 
-After approval, press **Send approved email**. The server reloads the current
+For later SMTP use, an explicit authenticated send API request after approval
+is required. The server reloads the current
 roster, checks approval/expiry/configuration and records delivery in the existing
 `decisions.delivery_json` and `sent_at`. Repeated sends are blocked; recipients
 already submitted the same action for a covering window are unchecked. The latest
@@ -223,8 +228,8 @@ acceptance is recorded honestly; inbox delivery is not confirmed by SMTP.
   The dashboard retains previous alerts as potentially outdated during outages.
   New, revised and removed alerts flag review even if posture remains NORMAL.
   The agent only recommends; the manager chooses the action and message audience,
-  edits text, and approves or rejects. Email is submitted only when the manager
-  explicitly chooses **Send approved email**.
+  edits text, approves or rejects, and downloads the saved message. The current
+  demo does not expose email sending.
 - Each decision retains original inputs, advice, recipients, draft and subsequent
   reviews in JSON. No extra audit or notification tables.
 - APScheduler checks every three hours (`EVALUATION_INTERVAL_HOURS=3`) with

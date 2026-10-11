@@ -278,8 +278,8 @@ three-hour cadence inside the API container; this host timer only manages TLS.
 3. Inspect real source URLs/timestamps, modeled AQI labeling and policy rules.
 4. Review every inclusion/exclusion; try facility-wide scope for remote staff.
 5. Edit subject/body, confirm essential-staff instructions, and approve.
-6. Download the saved message, or use **Send approved email** after SMTP setup.
-   Scheduled checks do not send employee messages.
+6. Download the saved message. The current judging demo has no email controls;
+   keep `EMAIL_ENABLED=false`. Scheduled checks do not send employee messages.
 7. Restart `api` and confirm persisted decision history.
 
 ```sh
