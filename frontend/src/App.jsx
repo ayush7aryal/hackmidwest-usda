@@ -399,7 +399,7 @@ function ReviewHistory({ detail, timezone }) {
     {deliveries.length > 0 && <details className="disclosure"><summary>Email submissions ({deliveries.length})</summary>
       {deliveries.map(({ delivery }, index) => <p className="help" key={index}>{when(delivery.requested_at, timezone)} · {label(delivery.status)} · {delivery.accepted_employee_ids?.length || 0} employees accepted by provider</p>)}
     </details>}
-    {detail.alternatives.reviews?.length ? detail.alternatives.reviews.map((review, index) => <details className="disclosure" key={index}><summary>{label(review.status)} · {when(review.reviewed_at, timezone)}</summary><p>{review.reason}</p><strong>{review.draft_subject}</strong><p className="alert-description">{review.draft_body}</p></details>) : <p className="help">No manager review yet.</p>}
+    {detail.alternatives.reviews?.length ? detail.alternatives.reviews.map((review, index) => <details className="disclosure" key={index}><summary>{review.status === 'PENDING' ? 'Draft saved' : label(review.status)} · {when(review.reviewed_at, timezone)}</summary><p>{review.reason}</p><strong>{review.draft_subject}</strong><p className="alert-description">{review.draft_body}</p></details>) : <p className="help">No manager review yet.</p>}
   </details>
 }
 

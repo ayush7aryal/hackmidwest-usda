@@ -132,8 +132,12 @@ test('normal decision header and saved message have no review flag while overrid
   fixture.decision.posture = 'NORMAL'
   fixture.decision.alternatives.original_recommendation.posture = 'NORMAL'
   fixture.decision.recipients = previewRows({ posture: 'NORMAL' })
+  fixture.decision.alternatives.reviews = [{ status: 'PENDING', posture: 'NORMAL', reviewed_at: fixture.decision.evaluated_at,
+    reason: 'Synthetic normal assessment saved.', draft_subject: 'Synthetic draft', draft_body: 'Synthetic message' }]
   await mount('#decision/14')
   assert.match(document.querySelector('.review-container .page-head').textContent, /No review needed/)
+  assert.doesNotMatch(document.querySelector('.review-container').textContent, /Needs review/)
+  assert.match(document.querySelector('.history-panel').textContent, /Draft saved/)
   await click(button('3Message'))
   assert.match(document.querySelector('.review-panel').textContent, /Saved · No review needed/)
   await click(button('1Risk'))
