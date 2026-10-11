@@ -9,11 +9,17 @@ SendGrid integration update:
   timeout, private recipient envelopes, approval/duplicate guards, provider ID
   persistence, client rejections and uncertain delivery handling. No real emails
   are sent by these tests.
-- Email remains disabled and the judging frontend remains unchanged. Live
-  SendGrid authentication and delivery require an account API key and verified
-  sender. See [SendGrid setup](SENDGRID_SETUP.md).
+- Email remains disabled and the judging frontend remains unchanged. See
+  [SendGrid setup](SENDGRID_SETUP.md).
 - A read-only request from Akamai reached SendGrid over HTTPS and received HTTP
   405, confirming network connectivity without authentication or email submission.
+- After private key/sender configuration, the actual SendGrid SDK submitted one
+  clearly labeled setup test from Akamai to the owner's `+1` Gmail alias and
+  received **HTTP 202 ACCEPTED** with a provider message ID. This verifies provider
+  authentication and request acceptance, not inbox receipt. The isolated setup
+  process did not approve or send any operational decision. The main application
+  retains `EMAIL_ENABLED=false`; credentials were securely synchronized, the
+  services recreated and public HTTPS health/manager login rechecked successfully.
 
 Judging demo update: email setup/status notices and send controls were removed
 from the frontend. It no longer requests `/api/email-status` or `/send`.
