@@ -88,6 +88,12 @@ def email_status() -> dict:
         return {"ready": False, "demo_redirect": False, "message": "Email setup required: configure an enabled provider and sender."}
 
 
+def historical_demo(decision: dict) -> bool:
+    """Only a saved manager review can authorize a labeled historical message."""
+    reviews = json.loads(decision.get('alternatives_json') or '{}').get('reviews', [])
+    return bool(reviews and reviews[-1].get('historical_demo_confirmed', False))
+
+
 def delivery_message(config: dict, decision: dict, recipients: list[dict]) -> tuple[EmailMessage, list[str]]:
     """Hide employee addresses from one another; redirect synthetic demo mail explicitly."""
     intended = sorted({address(row["email"]) for row in recipients})
@@ -97,10 +103,14 @@ def delivery_message(config: dict, decision: dict, recipients: list[dict]) -> tu
     message = EmailMessage()
     message['From'] = config["sender"]
     message['To'] = config["redirect"] or 'undisclosed-recipients:;'
-    message['Subject'] = ('[DEMO] ' if config["redirect"] else '') + decision['draft_subject']
+    prefix = '[HISTORICAL DEMO] ' if historical_demo(decision) else '[DEMO] ' if config['redirect'] else ''
+    message['Subject'] = prefix + decision['draft_subject']
     message['Date'] = format_datetime(datetime.now(UTC))
     message['Message-ID'] = make_msgid(idstring=f"facility-decision-{decision['id']}")
     body = decision['draft_body']
+    if historical_demo(decision):
+        body = ('HISTORICAL DEMO — this saved assessment is for demonstration only, '
+                'not a current operating instruction. Original impact dates are retained below.\n\n' + body)
     if config["redirect"]:
         body = "DEMO DELIVERY — synthetic employee addresses were not contacted.\nPlanned recipients: " + ', '.join(intended) + '\n\n' + body
     message.set_content(body)
@@ -149,6 +159,7 @@ def approved_recipients(db, row: dict, location: dict) -> list[dict]:
     body = ReviewRequest(status='APPROVED', posture=row['posture'], reason=row['reason'],
                          draft_subject=row['draft_subject'], draft_body=row['draft_body'],
                          essential_confirmed=review.get('essential_confirmed', False),
+                         historical_demo_confirmed=review.get('historical_demo_confirmed', False),
                          **selection.model_dump(exclude={'posture'}))
     validate_approval(row, location, alternatives, fresh, body)
     if not recipients:
@@ -204,6 +215,7 @@ def send_decision(db, decision_id: int, manager_id: int) -> dict:
         except ValueError:
             raise HTTPException(422, "Invalid email address or message header; correct it before sending") from None
         delivery = {'status': 'IN_PROGRESS', 'provider': config['provider'],
+                    'historical_demo': historical_demo(row),
                     'requested_at': utc_now(), 'requested_by': manager_id,
                     'demo_redirect': bool(config['redirect']), 'targets': targets,
                     'intended_employee_ids': [employee['emp_id'] for employee in recipients],

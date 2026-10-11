@@ -79,6 +79,7 @@ beforeEach(() => {
     if (path === `/api/locations/${fixture.office.id}/decisions`) return response([fixture.decision])
     if (path === `/api/locations/${fixture.office.id}/week-plan`) return response(fixture.week)
     if (path === `/api/locations/${fixture.office.id}/weather-alerts`) return response(failAlerts ? { available: false, alerts: [], error: 'Synthetic alert outage' } : { available: true, alerts: fixture.alerts, fetched_at: '2026-10-10T19:00:00Z' })
+    if (path === '/api/locations/1/evaluate') return response({ state: 'COMPLETED', decision_id: 14 })
     if (path === '/api/locations/1/evaluate-week') return response(failWeek ? { state: 'INSUFFICIENT_DATA', message: 'Synthetic model outage', days: [] } : fixture.week)
     if (path === '/api/decisions/14' && !body) return response(fixture.decision)
     if (path === '/api/decisions/14/recipients') return failPreview ? response({ detail: 'Synthetic recipient outage' }, 503) : response(previewRows(body))
@@ -559,4 +560,57 @@ test('evidence opens to concise choices with technical detail collapsed', async 
   assert.equal([...panel.querySelectorAll('details')].every(item => !item.open), true)
   assert.equal(outsideClosedDetails(panel.querySelector('pre')), false)
   assert.equal(outsideClosedDetails(panel.querySelector('.policy-list')), false)
+})
+
+test('expired assessment asks for historical demo consent before approval and sending', async () => {
+  fixture.decision.affected_start = '2020-01-06T14:00:00Z'
+  fixture.decision.affected_end = '2020-01-06T22:00:00Z'
+  await mount('#decision/14'); await click(button('3Message')); await click(document.querySelector('.check-notice input'))
+  assert.match(document.querySelector('.review-panel').textContent, /impact window has ended/)
+  assert(button('Refresh assessment'))
+  await click(button('Approve and send email'))
+  assert.equal(requests.filter(item => /\/(review|send)$/.test(item.path)).length, 0)
+  let prompt
+  window.confirm = text => { prompt = text; return true }
+  await click(button('Approve and send email'))
+  assert.match(prompt, /HISTORICAL DEMO/)
+  const saved = requests.find(item => item.path.endsWith('/review'))
+  assert.equal(saved.body.historical_demo_confirmed, true)
+  assert.equal(saved.body.resend_confirmed, false)
+  assert.equal(requests.filter(item => item.path.endsWith('/send')).length, 1)
+  await click(button('Approve and send email'))
+  assert.match(prompt, /Previously notified employees will receive it again/)
+  assert.equal(requests.filter(item => item.path.endsWith('/send')).length, 2)
+})
+
+test('expired assessment can refresh current conditions without sending employees email', async () => {
+  fixture.decision.affected_end = '2020-01-06T22:00:00Z'
+  await mount('#decision/14'); await click(button('3Message'))
+  const originalFetch = globalThis.fetch
+  let complete
+  globalThis.fetch = (path, options) => path === '/api/locations/1/evaluate'
+    ? new Promise(resolve => { complete = () => resolve(response({ state: 'COMPLETED', decision_id: 14 })) }) : originalFetch(path, options)
+  await click(button('Refresh assessment'))
+  assert.equal(button('Refreshing assessment…').disabled, true)
+  assert(document.querySelector('.evaluation-progress .spinner'))
+  assert.equal(button('Approve and send email').matches(':disabled'), true)
+  await act(async () => { complete(); await tick() })
+  assert.equal(requests.filter(item => item.path.endsWith('/send')).length, 0)
+  assert.equal(document.querySelector('[role=alert]'), null)
+})
+
+test('refresh failure retains the edited message and expired assessment', async () => {
+  fixture.decision.affected_end = '2020-01-06T22:00:00Z'
+  await mount('#decision/14'); await click(button('3Message'))
+  await change(document.querySelector('.message-input'), 'Keep these manager edits on failure.')
+  await click(button('Refresh assessment'))
+  assert.equal(requests.some(item => item.path.endsWith('/evaluate')), false)
+  window.confirm = () => true
+  const originalFetch = globalThis.fetch
+  globalThis.fetch = (path, options) => path === '/api/locations/1/evaluate'
+    ? response({ state: 'INSUFFICIENT_DATA', message: 'Synthetic current data unavailable.' }) : originalFetch(path, options)
+  await click(button('Refresh assessment'))
+  assert.match(document.querySelector('[role=alert]').textContent, /current data unavailable/)
+  assert.equal(document.querySelector('.message-input').value, 'Keep these manager edits on failure.')
+  assert.equal(requests.filter(item => item.path.endsWith('/send')).length, 0)
 })

@@ -202,6 +202,10 @@ The review screen keeps sources, policy thresholds and uncertainty collapsed
 until requested. The recipient list opens with all staff visible and editable.
 Message has one **Approve and send email** button, which remains available after
 a completed send and asks for confirmation before sending again.
+Expired assessments offer **Refresh assessment**. For the hackathon, managers can
+explicitly confirm a historical demo send; the email is labeled
+`[HISTORICAL DEMO]` and retains the original dates. Expired operational notices
+remain blocked without that confirmation.
 
 ## Scope and policy
 

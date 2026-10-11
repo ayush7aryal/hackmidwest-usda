@@ -240,6 +240,7 @@ class ReviewRequest(RecipientSelection):
     draft_body: str = Field(min_length=1, max_length=20000)
     essential_confirmed: bool = False
     resend_confirmed: bool = False
+    historical_demo_confirmed: bool = False
 
     @field_validator("draft_subject")
     @classmethod

@@ -8,6 +8,7 @@ const REASONS = { scheduled_on_site: 'Scheduled on-site', manager_selected: 'Sel
 const label = value => LABELS[value] || value?.replaceAll('_', ' ') || '—'
 const decisionFromHash = () => window.location.hash.match(/^#decision\/(\d+)$/)?.[1] || null
 const audienceDefault = () => ({ scope: 'affected', include_ids: [], exclude_ids: [] })
+const impactExpired = detail => new Date(detail.affected_end).getTime() <= Date.now()
 
 function recipientState(rows) {
   return JSON.stringify(rows.map(row => [row.emp_id, row.name, row.email, row.shift_id, row.weekly_hours,
@@ -329,20 +330,23 @@ function RiskStep({ detail, form, busy, onEdit, onPosture, timezone }) {
   </>
 }
 
-function MessageStep({ detail, form, rows, busy, dirty, ready, essential, email, onEssential, onEdit, onSave, onDownload }) {
+function MessageStep({ detail, form, rows, busy, dirty, ready, essential, email, onEssential, onEdit, onSave, onDownload, onRefresh, refreshing }) {
   const selected = rows.filter(row => row.included)
   const needsEssential = selected.some(row => row.requires_manager_review)
   const submitted = Boolean(detail.sent_at || ['PARTIAL', 'ACCEPTED'].includes(detail.delivery?.status))
   const pending = ['IN_PROGRESS', 'UNKNOWN'].includes(detail.delivery?.status)
   return <><p className="eyebrow">STEP 3 OF 3</p><div className="section-head"><h2>Prepare your message</h2><Badge>{selected.length} recipient{selected.length === 1 ? '' : 's'}</Badge></div>
     <p className="help">Review the message, then approve and send it to the selected affected employees.</p>
+    {impactExpired(detail) && <div className="essential-note" role="status">This assessment's impact window has ended. Refresh for current conditions, or approve a clearly labeled historical demo email.
+      <div><button type="button" className="small-button" disabled={busy} onClick={onRefresh}>{refreshing ? 'Refreshing assessment…' : 'Refresh assessment'}</button></div></div>}
+    {refreshing && <EvaluationLoader weekly={false} />}
     {form.posture !== detail.posture && <p className="essential-note">Your action changed. Update the message wording to match.</p>}
     {!selected.length && <p className="essential-note">No recipients selected. Choose employees in Recipients.</p>}
     <form onSubmit={event => { event.preventDefault(); onSave(event.nativeEvent.submitter?.value || 'PENDING') }}><fieldset disabled={busy || !ready || pending}>
       <label>Subject<input maxLength="240" required value={form.draft_subject} onChange={event => onEdit('draft_subject', event.target.value)} /></label>
       <label>Message<textarea className="message-input" rows="9" maxLength="20000" required value={form.draft_body} onChange={event => onEdit('draft_body', event.target.value)} /></label>
       {needsEssential && <label className="check-notice"><input type="checkbox" checked={essential} onChange={event => onEssential(event.target.checked)} />I have confirmed instructions for the selected essential staff.</label>}
-      <div className="message-actions"><button className="primary" type="submit" value="APPROVED" disabled={!email?.ready || !selected.length || (needsEssential && !essential)}>{busy ? 'Approving and sending…' : 'Approve and send email'}</button><button type="submit" value="PENDING" disabled={submitted}>Save draft</button>
+      <div className="message-actions"><button className="primary" type="submit" value="APPROVED" disabled={!email?.ready || !selected.length || (needsEssential && !essential)}>{busy && !refreshing ? 'Approving and sending…' : 'Approve and send email'}</button><button type="submit" value="PENDING" disabled={submitted}>Save draft</button>
         <button className="text-button danger" type="submit" value="REJECTED" disabled={submitted}>Reject</button></div>
     </fieldset></form>
     <div className="message-actions secondary-actions"><button className="text-button" disabled={busy || dirty} onClick={onDownload}>Download saved message ↓</button></div>
@@ -379,6 +383,7 @@ function DecisionDetails({ id, onDirtyChange, onNavigate }) {
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
   const [email, setEmail] = useState(null)
+  const [refreshing, setRefreshing] = useState(false)
   const stepPanel = useRef(null)
   function apply(value) {
     setDetail(value); setRows(value.recipients)
@@ -417,16 +422,31 @@ function DecisionDetails({ id, onDirtyChange, onNavigate }) {
   }
   function edit(key, value) { setForm(current => ({ ...current, [key]: value })); setDirty(true); setNotice('') }
   function changeStep(next) { setStep(next); if (next > 0) preview(selection) }
+  async function refreshAssessment() {
+    if (busy || (dirty && !window.confirm('Discard unsaved edits and refresh the assessment?'))) return
+    setBusy(true); setRefreshing(true); setError(''); setNotice('')
+    try {
+      const result = await api(`/locations/${detail.location_id}/evaluate`, { method: 'POST' })
+      if (result.state !== 'COMPLETED') throw new Error(result.message)
+      setDirty(false); onDirtyChange(false)
+      window.location.hash = `decision/${result.decision_id}`
+    } catch (error) { setError(error.message) } finally { setBusy(false); setRefreshing(false) }
+  }
   async function save(status) {
     if (form.reason.trim().length < 20) { setError('Add a rationale of at least 20 characters in the Risk step.'); setStep(0); return }
     if (!ready || busy) return
     const repeat = Boolean(detail.sent_at || ['PARTIAL', 'ACCEPTED'].includes(detail.delivery?.status)
       || detail.alternatives.delivery_history?.length || rows.some(row => row.included && row.previous_delivery))
-    if (status === 'APPROVED' && repeat && !window.confirm('Some selected employees have already received this notice. Approve and send again?')) return
+    const expired = impactExpired(detail)
+    const confirmation = expired
+      ? `This impact window has ended. Send a clearly labeled HISTORICAL DEMO email with the original dates?${repeat ? ' Previously notified employees will receive it again.' : ''}`
+      : 'Some selected employees have already received this notice. Approve and send again?'
+    if (status === 'APPROVED' && (repeat || expired) && !window.confirm(confirmation)) return
     let reviewed = false
     setBusy(true); setError(''); setNotice('')
     try {
-      const result = await api(`/decisions/${id}/review`, { method: 'POST', body: { ...form, ...selection, status, essential_confirmed: essential, resend_confirmed: status === 'APPROVED' && repeat } })
+      const result = await api(`/decisions/${id}/review`, { method: 'POST', body: { ...form, ...selection, status, essential_confirmed: essential,
+        resend_confirmed: status === 'APPROVED' && repeat, historical_demo_confirmed: status === 'APPROVED' && expired } })
       reviewed = true
       apply(result)
       if (status === 'APPROVED') await submitEmployeeEmails()
@@ -463,7 +483,7 @@ function DecisionDetails({ id, onDirtyChange, onNavigate }) {
     <section className="card review-panel" ref={stepPanel} tabIndex={-1} aria-busy={busy} aria-label={`${['Risk', 'Recipients', 'Message'][step]} review`}>
       {step === 0 && <RiskStep detail={detail} form={form} busy={busy} onEdit={edit} timezone={zone} onPosture={changePosture} />}
       {step === 1 && <RecipientStep rows={rows} selection={selection} busy={busy} detail={detail} timezone={zone} onPreview={preview} onToggle={toggle} />}
-      {step === 2 && <MessageStep detail={detail} form={form} rows={rows} busy={busy} dirty={dirty} ready={ready} essential={essential} email={email} onEssential={setEssential} onEdit={edit} onSave={save} onDownload={download} />}
+      {step === 2 && <MessageStep detail={detail} form={form} rows={rows} busy={busy} dirty={dirty} ready={ready} essential={essential} email={email} onEssential={setEssential} onEdit={edit} onSave={save} onDownload={download} onRefresh={refreshAssessment} refreshing={refreshing} />}
       <div className="step-actions">{step > 0 ? <button disabled={busy} onClick={() => changeStep(step - 1)}>← {step === 1 ? 'Risk' : 'Recipients'}</button> : <span className="help">You choose the final action.</span>}
         {step < 2 && <button className="primary" disabled={busy || !ready} onClick={() => changeStep(step + 1)}>{busy ? 'Updating recipients…' : `Continue to ${step === 0 ? 'recipients' : 'message'} →`}</button>}</div>
     </section><ReviewHistory detail={detail} timezone={zone} />

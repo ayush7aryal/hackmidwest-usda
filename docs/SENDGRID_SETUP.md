@@ -122,3 +122,15 @@ existing decision JSON and visible as Email submissions in the decision record.
 Explicitly selecting a previously notified employee also requires confirmation.
 Pending or uncertain provider submissions must be resolved before another send.
 No new database tables are introduced.
+
+## Expired impact windows
+
+An expired assessment normally stops approval and sending before SendGrid is
+called. Message now provides **Refresh assessment** for current conditions.
+For a historical hackathon demo, **Approve and send email** asks for explicit
+confirmation and sends `historical_demo_confirmed: true` on the review. The
+server records that consent and checks it again during dispatch. The actual
+email subject starts with `[HISTORICAL DEMO]` and its body states that it is not a
+current operating instruction. Original risk dates, evidence and shift matching
+are retained. Essential confirmation, current facility ownership/configuration,
+recipient validation and unresolved-submission guards still apply.

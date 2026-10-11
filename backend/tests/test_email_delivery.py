@@ -293,3 +293,56 @@ def test_confirmed_resend_still_rechecks_new_uncertain_submission_before_dispatc
     result=client.post(f"/api/decisions/{evaluated['id']}/send",headers=headers)
     assert result.status_code==409
     assert not provider
+
+
+def expire_decision(db_path, decision_id):
+    with closing(connect(db_path)) as db, db:
+        db.execute("UPDATE decisions SET affected_start='2020-01-06T14:00:00Z', affected_end='2020-01-06T22:00:00Z' WHERE id=?", (decision_id,))
+
+
+def test_expired_demo_requires_confirmation_then_sends_with_historical_label(client, headers, evaluated, db_path, provider):
+    expire_decision(db_path, evaluated['id'])
+    url=f"/api/decisions/{evaluated['id']}"
+    body=payload(evaluated,scope='all_staff',draft_body='Original impact window: January 6, 2020, 08:00–16:00 CST.')
+    assert client.post(url+'/review',headers=headers,json=body).status_code==409
+    assert not provider
+    saved=approve(client,headers,evaluated,scope='all_staff',historical_demo_confirmed=True,draft_body=body['draft_body'])
+    assert saved['affected_end']=='2020-01-06T22:00:00Z'
+    assert saved['alternatives']['original_recommendation']==evaluated['alternatives']['original_recommendation']
+    assert saved['alternatives']['reviews'][-1]['historical_demo_confirmed'] is True
+    delivery=client.post(url+'/send',headers=headers)
+    assert delivery.status_code==200 and delivery.json()['status']=='ACCEPTED'
+    assert delivery.json()['historical_demo'] is True
+    message=provider[0][1]
+    assert str(message['Subject']).startswith('[HISTORICAL DEMO]')
+    assert 'not a current operating instruction' in message.get_content()
+    assert body['draft_body'] in message.get_content()
+    assert client.post(url+'/send',headers=headers).status_code==409
+    approve(client,headers,saved,scope='all_staff',historical_demo_confirmed=True,resend_confirmed=True)
+    assert client.post(url+'/send',headers=headers).json()['status']=='ACCEPTED'
+    assert len(provider)==2
+
+
+def test_window_expiring_after_approval_is_checked_again_before_dispatch(client, headers, evaluated, db_path, provider):
+    approve(client,headers,evaluated,scope='all_staff')
+    expire_decision(db_path,evaluated['id'])
+    result=client.post(f"/api/decisions/{evaluated['id']}/send",headers=headers)
+    assert result.status_code==409 and 'expired' in result.json()['detail']
+    assert not provider
+
+
+def test_historical_confirmation_still_requires_essential_instructions(client, headers, evaluated, db_path, provider):
+    expire_decision(db_path,evaluated['id'])
+    result=client.post(f"/api/decisions/{evaluated['id']}/review",headers=headers,
+                       json=payload(evaluated,scope='all_staff',historical_demo_confirmed=True,essential_confirmed=False))
+    assert result.status_code==422
+    assert not provider
+
+
+def test_historical_confirmation_does_not_bypass_changed_facility(client, headers, evaluated, db_path, provider):
+    expire_decision(db_path,evaluated['id'])
+    client.patch('/api/locations/1',headers=headers,json={'latitude':40.0})
+    result=client.post(f"/api/decisions/{evaluated['id']}/review",headers=headers,
+                       json=payload(evaluated,scope='all_staff',historical_demo_confirmed=True))
+    assert result.status_code==409 and 'configuration changed' in result.json()['detail']
+    assert not provider

@@ -79,7 +79,8 @@ def review_decision(db: sqlite3.Connection, decision_id: int, manager_id: int, b
                         "draft_subject": body.draft_subject, "draft_body": body.draft_body,
                         "selection": body.model_dump(include={"scope", "include_ids", "exclude_ids"}),
                         "essential_confirmed": body.essential_confirmed,
-                        "resend_confirmed": body.resend_confirmed})
+                        "resend_confirmed": body.resend_confirmed,
+                        "historical_demo_confirmed": body.historical_demo_confirmed})
         alternatives["recipient_selection"] = body.model_dump(include={"scope", "include_ids", "exclude_ids"})
         alternatives["notification"] = notification_rule(
             body.posture,
@@ -97,8 +98,8 @@ def review_decision(db: sqlite3.Connection, decision_id: int, manager_id: int, b
 
 def validate_approval(row: dict, location: dict, alternatives: dict, recipients: list[dict], body: ReviewRequest) -> None:
     """Expired/configuration-stale advice and essential personnel require explicit handling."""
-    if timestamp(row["affected_end"]) <= datetime.now(UTC):
-        raise HTTPException(409, "Impact window has expired; evaluate again before approving")
+    if timestamp(row["affected_end"]) <= datetime.now(UTC) and not body.historical_demo_confirmed:
+        raise HTTPException(409, "Impact window has expired; refresh the assessment or confirm a historical demo email")
     snapshot = alternatives.get("facility_snapshot", {})
     keys = ("name", "latitude", "longitude", "timezone", "open_time", "close_time")
     if snapshot and any(snapshot[key] != location[key] for key in keys):

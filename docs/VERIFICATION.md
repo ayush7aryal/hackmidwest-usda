@@ -1,5 +1,31 @@
 # MVP verification — October 10, 2026
 
+Expired-window demo sending correction:
+
+- Approval and final dispatch both rejected expired windows before contacting
+  SendGrid. The prior resend feature did not override expiry.
+- Message now offers Refresh assessment with a loader and preserves edits if
+  refresh fails. Expired demo sends require explicit manager confirmation.
+- Confirmation is stored in review history and reloaded at dispatch. Email
+  subject/body explicitly label historical demonstration use; original dates,
+  evidence and recipient matching remain intact. Unconfirmed stale operations,
+  changed facilities, essential staff without instructions and pending/unknown
+  submissions remain blocked.
+- 284 backend tests and 37 UI tests passed, plus the production frontend build.
+  Coverage includes expired approval/send, expiry between approval and dispatch,
+  labeled transport content, repeat demo sending, cancellation, refresh loading
+  and refresh failure. Provider requests are mocked; no real test email is sent.
+- Rebuilt local and Akamai containers; HTTPS, SendGrid configuration readiness,
+  database integrity and foreign keys passed. Preserved 13 facilities, 111 users,
+  nine shifts and 135 decisions. Backup:
+  `/root/facility-backups/before-expired-demo-20261011T041827Z.db`.
+- Exercised deployed review/dispatch against a temporary copy of expired decision
+  #114 with transport mocked: unconfirmed approval blocked, two confirmed sends
+  accepted, historical subject/body labeling correct, original dates retained,
+  delivery history preserved, and the live row unchanged. No real email sent.
+  Live recipient previews also passed. Asset: `/assets/index-dc6KhdSf.js`.
+
+
 Minimal review and manager audience controls (supersedes older selection restrictions):
 
 - Evidence now opens to collapsed Sources, Policy thresholds, and Uncertainty
