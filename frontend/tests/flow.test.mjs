@@ -117,6 +117,55 @@ async function change(element, value) {
 function outsideClosedDetails(element) { for (let node = element.parentElement; node; node = node.parentElement) if (node.tagName === 'DETAILS' && !node.open) return false; return true }
 
 // A compact dashboard must still surface exceptions and keep evidence reachable.
+test('normal assessments have no review flag in history or daily summary', async () => {
+  fixture.decision.posture = 'NORMAL'
+  fixture.office.last_checked_at = fixture.decision.evaluated_at
+  await mount()
+  const row = document.querySelector('.history-row')
+  assert.match(row.textContent, /No review needed/)
+  assert.doesNotMatch(row.textContent, /Needs review/)
+  assert.equal(row.querySelector('.badge').classList.contains('pending'), false)
+  assert.match(document.querySelector('.daily-summary').textContent, /View daily assessment/)
+})
+
+test('normal decision header and saved message have no review flag while overrides remain editable', async () => {
+  fixture.decision.posture = 'NORMAL'
+  fixture.decision.alternatives.original_recommendation.posture = 'NORMAL'
+  fixture.decision.recipients = previewRows({ posture: 'NORMAL' })
+  await mount('#decision/14')
+  assert.match(document.querySelector('.review-container .page-head').textContent, /No review needed/)
+  await click(button('3Message'))
+  assert.match(document.querySelector('.review-panel').textContent, /Saved · No review needed/)
+  await click(button('1Risk'))
+  await change(document.querySelector('.operational-action select'), 'TELEWORK')
+  assert.match(document.querySelector('.review-container .page-head').textContent, /Needs review/)
+  await change(document.querySelector('.operational-action select'), 'NORMAL')
+  assert.match(document.querySelector('.review-container .page-head').textContent, /No review needed/)
+  assert.equal(requests.filter(item => /\/(review|send)$/.test(item.path)).length, 0)
+})
+
+test('normal shift drafts do not increase review count or take priority over disruptions', async () => {
+  fixture.week.days[0].message_groups = [{ ...fixture.week.days[2].message_groups[0], posture: 'NORMAL', decision_id: 100 }]
+  await mount()
+  assert.equal(document.querySelector('[aria-pressed=true].day-button').getAttribute('aria-label'), 'Wednesday, Oct 14')
+  assert.match(document.querySelector('.week-plan .section-head').textContent, /2 drafts to review/)
+  await click(document.querySelector('[aria-label="Monday, Oct 12"]'))
+  const group = document.querySelector('.shift-draft')
+  assert.match(group.textContent, /No review needed/)
+  assert.match(group.textContent, /Open message/)
+  assert.doesNotMatch(group.textContent, /Needs review|Review draft/)
+})
+
+test('approved normal and rejected disruptive decisions retain their real review status', async () => {
+  fixture.decision.posture = 'NORMAL'
+  fixture.decision.manager_status = 'APPROVED'
+  fixture.week.days[2].message_groups[0].manager_status = 'REJECTED'
+  await mount()
+  assert.match(document.querySelector('.history-row').textContent, /Approved/)
+  assert.match(document.querySelector('.shift-draft').textContent, /Rejected/)
+  assert.match(document.querySelector('.week-plan .section-head').textContent, /1 draft to review/)
+})
+
 test('week selector opens the first pending day and shows only one date detail', async () => {
   await mount()
   assert.equal(document.querySelectorAll('.day-button').length, 7)

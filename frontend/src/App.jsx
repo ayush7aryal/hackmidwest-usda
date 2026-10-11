@@ -6,6 +6,8 @@ const POSTURES = ['NORMAL', 'DELAYED_OPENING', 'EARLY_DISMISSAL', 'TELEWORK', 'C
 const LABELS = { NORMAL: 'Normal operations', DELAYED_OPENING: 'Delayed opening', EARLY_DISMISSAL: 'Early dismissal', TELEWORK: 'Work remotely', CLOSED: 'Closed', PENDING: 'Needs review', APPROVED: 'Approved', REJECTED: 'Rejected' }
 const REASONS = { scheduled_on_site: 'Scheduled on-site', manager_selected: 'Selected by manager', facility_wide: 'Facility-wide notice', not_scheduled: 'Outside affected hours', already_remote: 'Already remote', manager: 'Manager', no_disruption: 'No schedule change', normal_operations: 'Normal operations · no notification needed', unchanged_operation: 'Refresh staff to check notification eligibility', already_notified: 'Already notified for this window', delivery_uncertain: 'Previous email submission unresolved', invalid_shift: 'Schedule needs correction', manager_excluded: 'Excluded by manager' }
 const label = value => LABELS[value] || value?.replaceAll('_', ' ') || '—'
+const needsReview = decision => decision.posture !== 'NORMAL' && (decision.manager_status || 'PENDING') === 'PENDING'
+const reviewLabel = decision => decision.posture === 'NORMAL' && (decision.manager_status || 'PENDING') === 'PENDING' ? 'No review needed' : label(decision.manager_status || 'PENDING')
 const decisionFromHash = () => window.location.hash.match(/^#decision\/(\d+)$/)?.[1] || null
 const audienceDefault = () => ({ scope: 'affected', include_ids: [], exclude_ids: [] })
 const impactExpired = detail => new Date(detail.affected_end).getTime() <= Date.now()
@@ -30,6 +32,12 @@ function calendarDate(value, short = false) {
 
 function Badge({ children, tone = '' }) {
   return <span className={`badge ${tone}`}>{children}</span>
+}
+
+function ReviewBadge({ decision }) {
+  const status = decision.manager_status || 'PENDING'
+  const tone = status === 'PENDING' && decision.posture === 'NORMAL' ? 'normal' : status.toLowerCase()
+  return <Badge tone={tone}>{reviewLabel(decision)}</Badge>
 }
 
 function ErrorMessage({ children }) {
@@ -219,7 +227,7 @@ function Dashboard() {
       <details className="daily-summary"><summary>Daily recommendation & location details</summary><ReasonText text={facility.status_reason || 'Check the forecast to get a recommendation.'} />
         <p className="help">Location {facility.id} · {facility.latitude}, {facility.longitude}</p>
         {facility.affected_start && <p className="help">{when(facility.affected_start, facility.timezone)} – {when(facility.affected_end, facility.timezone)}</p>}
-        {latest && <a href={`#decision/${latest.id}`}>Review daily recommendation →</a>}</details>
+        {latest && <a href={`#decision/${latest.id}`}>{needsReview(latest) ? 'Review daily recommendation' : 'View daily assessment'} →</a>}</details>
       {busy && <EvaluationLoader weekly={busy === 'week'} />}
     </section>
     {['FAILED', 'UNKNOWN', 'PARTIAL'].includes(latest?.alternatives.manager_alert?.status) && <p className="essential-note" role="status">The manager review email needs attention. <a href={`#decision/${latest.id}`}>Review the saved decision →</a></p>}
@@ -230,18 +238,18 @@ function Dashboard() {
       <p>Check the forecast to see affected dates, shifts and message drafts.</p><div className="mini-flow"><span>1 · Check forecast</span><span>2 · Review shifts</span><span>3 · Prepare message</span></div></section>}
     <details className="card history-panel"><summary>Past checks <span>{history.length} recent records</span></summary>
       <div className="section-head"><p className="help">Saved recommendations and messages</p><button className="small-button" disabled={Boolean(busy)} onClick={load}>Refresh</button></div>
-      {!history.length ? <p className="muted">Your checks will appear here.</p> : history.map(row => <a className="history-row" href={`#decision/${row.id}`} key={row.id}><div><strong>{label(row.posture)}</strong><span>{when(row.evaluated_at, facility?.timezone)}</span></div><Badge tone={row.manager_status.toLowerCase()}>{label(row.manager_status)}</Badge><span aria-hidden="true">→</span></a>)}
+      {!history.length ? <p className="muted">Your checks will appear here.</p> : history.map(row => <a className="history-row" href={`#decision/${row.id}`} key={row.id}><div><strong>{label(row.posture)}</strong><span>{when(row.evaluated_at, facility?.timezone)}</span></div><ReviewBadge decision={row} /><span aria-hidden="true">→</span></a>)}
     </details>
   </main>
 }
 
 function WeeklyPlan({ week, timezone }) {
   const days = week.days || []
-  const preferred = days.find(day => day.message_groups?.some(group => group.manager_status === 'PENDING')) || days.find(day => day.posture && day.posture !== 'NORMAL') || days[0]
+  const preferred = days.find(day => day.message_groups?.some(needsReview)) || days.find(day => day.posture && day.posture !== 'NORMAL') || days[0]
   const [selected, setSelected] = useState(preferred?.date)
   const day = days.find(item => item.date === selected) || days[0]
   const groups = days.flatMap(item => item.message_groups || [])
-  const pending = groups.filter(item => item.manager_status === 'PENDING').length
+  const pending = groups.filter(needsReview).length
   const unavailable = days.filter(item => item.state === 'INSUFFICIENT_DATA').length
   const mixedActions = new Set(day?.message_groups?.map(group => group.posture)).size > 1
   return <section className="card week-plan"><div className="section-head"><div><p className="eyebrow">WEEK AHEAD</p><h2>Your week at a glance</h2></div>
@@ -255,7 +263,7 @@ function WeeklyPlan({ week, timezone }) {
     {day ? <div className="selected-day" role="region" aria-labelledby="selected-day-title"><div className="section-head"><h3 id="selected-day-title">{calendarDate(day.date)}</h3><Badge tone={day.state === 'INSUFFICIENT_DATA' ? 'pending' : day.posture?.toLowerCase()}>{day.state === 'INSUFFICIENT_DATA' ? 'Forecast unavailable' : mixedActions ? 'Multiple shift actions' : label(day.posture)}</Badge></div>
       <ReasonText key={day.date} text={day.reason} /><SourceNotes warnings={day.warnings} />
       {day.message_groups?.map(group => <a className="shift-draft" key={group.decision_id} href={`#decision/${group.decision_id}`}><div><strong>{group.shift_name}</strong><span>{label(group.posture)} · {when(group.start, timezone, true)} – {when(group.end, timezone, true)} · {group.recipient_count} recipient{group.recipient_count === 1 ? '' : 's'}</span></div>
-        <Badge tone={group.manager_status?.toLowerCase()}>{label(group.manager_status || 'PENDING')}</Badge><span className="draft-cta">{group.manager_status === 'PENDING' ? 'Review draft' : 'Open message'} →</span></a>)}
+        <ReviewBadge decision={group} /><span className="draft-cta">{needsReview(group) ? 'Review draft' : 'Open message'} →</span></a>)}
       {day.state === 'COMPLETED' && !day.message_groups?.length && <div className="day-empty"><span>No affected on-site shifts.</span>{day.decision_ids?.[0] && <a href={`#decision/${day.decision_ids[0]}`}>View day assessment →</a>}</div>}
       {day.state === 'INSUFFICIENT_DATA' && <p className="help">No all-clear or employee draft is available for this date.</p>}
     </div> : <p className="muted">{week.message}</p>}
@@ -378,7 +386,7 @@ function MessageStep({ detail, form, rows, busy, dirty, ready, essential, email,
     {submitted && <p className="help">Previously submitted. You can edit and send again after confirmation.</p>}
     {email && !email.ready && <p className="help">Email sending is unavailable. You can save or download the message.</p>}
     <DeliveryStatus delivery={detail.delivery} busy={busy} onCheck={onCheckDelivery} />
-    <p className="help" role="status">{dirty ? 'Unsaved changes · save before downloading.' : `Saved · ${label(detail.manager_status)}`}</p>
+    <p className="help" role="status">{dirty ? 'Unsaved changes · save before downloading.' : `Saved · ${reviewLabel(detail)}`}</p>
   </>
 }
 
@@ -509,7 +517,7 @@ function DecisionDetails({ id, onDirtyChange, onNavigate }) {
   const group = detail.alternatives.message_group
   return <main className="container review-container"><a className="back" href="#" onClick={onNavigate}>← Week plan</a>
     <div className="page-head"><div><p className="eyebrow">{detail.alternatives.facility_snapshot?.name || `Facility ${detail.location_id}`}</p><h1>{group?.shift_name || 'Daily assessment'}</h1>
-      <p className="muted">{when(detail.affected_start, zone)} – {when(detail.affected_end, zone, true)}</p></div><Badge tone={detail.manager_status.toLowerCase()}>{label(detail.manager_status)}</Badge></div>
+      <p className="muted">{when(detail.affected_start, zone)} – {when(detail.affected_end, zone, true)}</p></div><ReviewBadge decision={{ ...detail, posture: form.posture }} /></div>
     <nav className="review-steps" aria-label="Message review steps">{['Risk', 'Recipients', 'Message'].map((name, index) => <button key={name} disabled={busy} aria-current={step === index ? 'step' : undefined} onClick={() => changeStep(index)}><span>{index + 1}</span>{name}</button>)}</nav>
     <ErrorMessage>{error}</ErrorMessage>{notice && <div className="notice success" role="status">{notice}</div>}
     <section className="card review-panel" ref={stepPanel} tabIndex={-1} aria-busy={busy} aria-label={`${['Risk', 'Recipients', 'Message'][step]} review`}>
