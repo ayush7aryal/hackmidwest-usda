@@ -1,5 +1,20 @@
 # MVP verification — October 10, 2026
 
+SendGrid integration update:
+
+- Installed the official `sendgrid==6.12.5` SDK through uv and updated the lockfile.
+  `EMAIL_PROVIDER=sendgrid` selects the HTTPS adapter; SMTP remains optional.
+- **251 backend tests passed**, including 16 new SendGrid cases. Tests run the
+  actual SDK with a mocked HTTP transport and verify POST endpoint, authentication,
+  timeout, private recipient envelopes, approval/duplicate guards, provider ID
+  persistence, client rejections and uncertain delivery handling. No real emails
+  are sent by these tests.
+- Email remains disabled and the judging frontend remains unchanged. Live
+  SendGrid authentication and delivery require an account API key and verified
+  sender. See [SendGrid setup](SENDGRID_SETUP.md).
+- A read-only request from Akamai reached SendGrid over HTTPS and received HTTP
+  405, confirming network connectivity without authentication or email submission.
+
 Judging demo update: email setup/status notices and send controls were removed
 from the frontend. It no longer requests `/api/email-status` or `/send`.
 Message editing, approval, recipient filtering and download remain available.

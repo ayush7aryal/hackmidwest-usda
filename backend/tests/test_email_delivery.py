@@ -15,7 +15,7 @@ REAL_SUBMIT = email_delivery.submit_smtp
 
 @pytest.fixture
 def provider(monkeypatch):
-    for key,value in {'EMAIL_ENABLED':'true','SMTP_HOST':'smtp.test.invalid','SMTP_PORT':'587',
+    for key,value in {'EMAIL_ENABLED':'true','EMAIL_PROVIDER':'smtp','SMTP_HOST':'smtp.test.invalid','SMTP_PORT':'587',
                       'SMTP_USERNAME':'test-user','SMTP_PASSWORD':'test-secret','EMAIL_FROM':'sender@example.com',
                       'DEMO_EMAIL_TO':'owner@gmail.com'}.items():
         monkeypatch.setenv(key,value)

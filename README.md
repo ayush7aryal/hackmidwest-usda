@@ -5,8 +5,9 @@ SQLite, one Strands agent, two live data tools, React/Vite, and two Docker
 containers. Built from [the blueprint](docs/HACKATHON_IMPLEMENTATION.md).
 **The current judging demo prepares, approves and downloads messages.**
 Email controls and provider setup notices are removed from the frontend, and
-delivery is disabled in the demo deployment. The optional SMTP backend is kept
-for later use. Scheduled checks and the agent never send employee messages.
+delivery is disabled in the demo deployment. The optional SendGrid HTTPS and
+SMTP backends are kept for later use. Scheduled checks and the agent never send
+employee messages.
 
 ## Run the complete application locally
 
@@ -101,6 +102,11 @@ hours are same-day; impact windows can cross midnight. Matching uses actual loca
 dates and IANA timezone/DST offsets.
 
 ## Five-location demo and Gmail
+
+For delivery through HTTPS instead of SMTP, follow
+[SendGrid setup](docs/SENDGRID_SETUP.md). The official SDK is installed through
+uv; configuration requires `EMAIL_PROVIDER=sendgrid`, `SENDGRID_API_KEY` and a
+verified `EMAIL_FROM`. No SMTP-port access or Gmail App Password is required.
 
 The current demo exposes message preparation, approval and download only. The
 SMTP settings below document the optional backend for later use; leave

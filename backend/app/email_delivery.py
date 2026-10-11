@@ -1,4 +1,4 @@
-"""Explicit manager-triggered SMTP delivery using the existing decision record."""
+"""Explicit manager-triggered email delivery using the existing decision record."""
 
 import json
 import os
@@ -16,6 +16,7 @@ from app.db import utc_now
 from app.models import RecipientSelection, ReviewRequest
 from app.notification_rules import already_notified
 from app.review import owned_decision, recipient_preview, validate_approval
+from app.sendgrid_delivery import SendGridResponseError, submit_sendgrid
 
 
 def address(value: str) -> str:
@@ -58,14 +59,33 @@ def smtp_settings() -> dict:
             "redirect": address(redirect) if redirect else None}
 
 
+def delivery_settings() -> dict:
+    """Select one configured provider; never silently fall back after a failure."""
+    provider = os.environ.get('EMAIL_PROVIDER', 'smtp').strip().lower()
+    if provider == 'smtp':
+        return smtp_settings() | {'provider': 'smtp'}
+    if provider != 'sendgrid':
+        raise ValueError('EMAIL_PROVIDER must be smtp or sendgrid')
+    if os.environ.get('EMAIL_ENABLED', 'false').lower() != 'true':
+        raise ValueError('Email sending is disabled')
+    key = os.environ.get('SENDGRID_API_KEY', '').strip()
+    if not key or any(character.isspace() for character in key):
+        raise ValueError('Configure SENDGRID_API_KEY before sending')
+    redirect = os.environ.get('DEMO_EMAIL_TO', '').strip()
+    return {'provider': 'sendgrid', 'api_key': key,
+            'sender': address(os.environ.get('EMAIL_FROM', '')),
+            'redirect': address(redirect) if redirect else None}
+
+
 def email_status() -> dict:
     """Expose readiness without leaking provider credentials."""
     try:
-        config = smtp_settings()
+        config = delivery_settings()
         return {"ready": True, "demo_redirect": bool(config["redirect"]),
-                "message": "Demo email goes to the configured test inbox." if config["redirect"] else "Email provider ready."}
+                "provider": config['provider'],
+                "message": "Demo email goes to the configured test inbox." if config["redirect"] else "Email provider configured; connection is checked on send."}
     except (ValueError, TypeError):
-        return {"ready": False, "demo_redirect": False, "message": "Email setup required: configure SMTP and a demo inbox."}
+        return {"ready": False, "demo_redirect": False, "message": "Email setup required: configure an enabled provider and sender."}
 
 
 def delivery_message(config: dict, decision: dict, recipients: list[dict]) -> tuple[EmailMessage, list[str]]:
@@ -138,10 +158,17 @@ def approved_recipients(db, row: dict, location: dict) -> list[dict]:
     return recipients
 
 
+def submit_delivery(config: dict, message: EmailMessage, targets: list[str]) -> dict:
+    """Keep transport selection separate from approval and audience rules."""
+    if config['provider'] == 'sendgrid':
+        return submit_sendgrid(config, message, targets)
+    return {'refused': submit_smtp(config, message, targets)}
+
+
 def send_decision(db, decision_id: int, manager_id: int) -> dict:
-    """Persist the claim before SMTP; retain uncertain outcomes for manager inspection."""
+    """Persist the claim before submission; keep uncertain outcomes inspectable."""
     try:
-        config = smtp_settings()
+        config = delivery_settings()
     except (ValueError, TypeError) as error:
         raise HTTPException(503, str(error)) from None
     with db:
@@ -152,16 +179,23 @@ def send_decision(db, decision_id: int, manager_id: int) -> dict:
             message, targets = delivery_message(config, row, recipients)
         except ValueError:
             raise HTTPException(422, "Invalid email address or message header; correct it before sending") from None
-        delivery = {'status': 'IN_PROGRESS', 'requested_at': utc_now(), 'requested_by': manager_id,
+        delivery = {'status': 'IN_PROGRESS', 'provider': config['provider'],
+                    'requested_at': utc_now(), 'requested_by': manager_id,
                     'demo_redirect': bool(config['redirect']), 'targets': targets,
                     'intended_employee_ids': [employee['emp_id'] for employee in recipients],
                     'message_id': str(message['Message-ID'])}
         db.execute('UPDATE decisions SET delivery_json = ? WHERE id = ?', (json.dumps(delivery), decision_id))
     accepted = []
     try:
-        refused = submit_smtp(config, message, targets)
+        result = submit_delivery(config, message, targets)
+        refused = result.pop('refused')
+        delivery.update(result)
         accepted = [target for target in targets if target not in refused]
         delivery.update(status='FAILED' if not accepted else 'PARTIAL' if refused else 'ACCEPTED', refused_addresses=list(refused))
+    except SendGridResponseError as error:
+        definite_rejection = 400 <= error.status_code < 500 and error.status_code != 408
+        delivery.update(status='FAILED' if definite_rejection else 'UNKNOWN',
+                        http_status=error.status_code, error=str(error))
     except (SMTPSetupError, smtplib.SMTPAuthenticationError, smtplib.SMTPRecipientsRefused, smtplib.SMTPSenderRefused, smtplib.SMTPDataError) as error:
         delivery.update(status='FAILED', error=type(error).__name__)
     except (OSError, smtplib.SMTPException) as error:
