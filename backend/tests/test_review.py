@@ -29,7 +29,7 @@ def test_complete_evaluate_preview_edit_approve_workflow(client, headers, evalua
     assert "America/Chicago" in evaluated["draft_body"]
     preview = client.post(url + "/recipients", headers=headers, json={"scope": "all_staff"})
     assert preview.status_code == 200
-    assert len([row for row in preview.json() if row["included"]]) == 6
+    assert len([row for row in preview.json() if row["included"]]) == 7
     result = client.post(url + "/review", headers=headers, json=payload(evaluated, scope="all_staff"))
     assert result.status_code == 200
     saved = result.json()

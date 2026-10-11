@@ -263,41 +263,55 @@ function shiftHours(row, affectedStart, timezone) {
   return hours ? `${key} ${hours.join('–')}` : 'Not scheduled this day'
 }
 
-function EmployeeTable({ rows, onToggle, busy, scope, affectedStart, timezone }) {
+function EmployeeTable({ rows, onToggle, busy, affectedStart, timezone }) {
   return <div className="table-scroll"><table><thead><tr><th><span className="sr-only">Include</span></th><th>Employee</th><th>Affected shift</th><th>Selection</th></tr></thead><tbody>
     {rows.map(row => <tr key={row.emp_id} className={row.included ? '' : 'filtered'}><td><input type="checkbox" aria-label={`Include ${row.name}`} checked={row.included}
-      disabled={busy || ['already_notified', 'delivery_uncertain'].includes(row.reason) || (scope === 'affected' && ['not_scheduled', 'already_remote', 'invalid_shift', 'no_disruption', 'normal_operations', 'unchanged_operation'].includes(row.reason))} onChange={event => onToggle(row.emp_id, event.target.checked)} /></td>
+      disabled={busy} onChange={event => onToggle(row.emp_id, event.target.checked)} /></td>
       <td><strong>{row.name}</strong><small>{row.email}</small><div className="employee-flags">{row.is_essential && <Badge tone="pending">Essential</Badge>}{row.is_teleworking && <Badge>Remote</Badge>}{row.is_manager && <Badge>Manager</Badge>}</div></td>
-      <td>{row.shift_name || 'No shift'}<small>{shiftHours(row, affectedStart, timezone)}</small></td><td>{REASONS[row.reason] || label(row.reason)}</td></tr>)}
+      <td>{row.shift_name || 'No shift'}<small>{shiftHours(row, affectedStart, timezone)}</small></td><td>{REASONS[row.reason] || label(row.reason)}{row.previous_delivery && <small>{REASONS[row.previous_delivery]}</small>}</td></tr>)}
   </tbody></table></div>
 }
 
 function RecipientStep({ rows, selection, busy, onPreview, onToggle, detail, timezone }) {
-  const [view, setView] = useState('included')
+  const [view, setView] = useState('all')
   const included = rows.filter(row => row.included)
-  const visible = rows.filter(row => view === 'included' ? row.included : !row.included)
+  const visible = view === 'all' ? rows : rows.filter(row => view === 'included' ? row.included : !row.included)
   const emptyMessage = rows.some(row => ['normal_operations', 'no_disruption'].includes(row.reason))
-    ? 'Normal operations: no automatic employee notice is needed. Choose a different action in Risk if local impacts require it.'
+    ? 'Normal operations: no automatic employee notice is needed. Select employees below or choose everyone to send a manager notice.'
     : 'No eligible employees selected. Open Excluded to see why, or select affected staff to clear manual exclusions.'
   return <><div className="section-head"><div><p className="eyebrow">STEP 2 OF 3</p><h2>Who needs this message?</h2></div><div className="inline-actions">
-    {selection.scope === 'affected' && <button disabled={busy} className="small-button" onClick={() => { setView('included'); onPreview(audienceDefault()) }}>Select affected staff</button>}
+    {selection.scope === 'affected' && <button disabled={busy} className="small-button" onClick={() => { setView('all'); onPreview(audienceDefault()) }}>Select affected staff</button>}
     <button disabled={busy} className="small-button" onClick={() => onPreview(selection)}>Refresh staff</button></div></div>
-    <label>Audience<select disabled={busy} value={selection.scope} onChange={event => { setView('included'); onPreview({ scope: event.target.value, include_ids: [], exclude_ids: [] }) }}>
+    <label>Audience<select disabled={busy} value={selection.scope} onChange={event => { setView('all'); onPreview({ scope: event.target.value, include_ids: [], exclude_ids: [] }) }}>
       <option value="affected">Affected on-site employees</option><option value="all_staff">Everyone at this facility</option></select></label>
-    <p className="help">{selection.scope === 'affected' ? 'Matched to this date and time window. Remote and unscheduled staff are excluded.' : 'Includes remote and unscheduled staff. Select the manager explicitly if needed.'}</p>
-    <div className="segmented" role="group" aria-label="Recipient list"><button aria-pressed={view === 'included'} onClick={() => setView('included')}>Selected ({included.length})</button><button aria-pressed={view === 'excluded'} onClick={() => setView('excluded')}>Excluded ({rows.length - included.length})</button></div>
+    <p className="help">{selection.scope === 'affected' ? 'Suggested from affected shifts. Check or uncheck anyone below.' : 'All facility staff selected, including remote staff and managers. Uncheck anyone to exclude them.'}</p>
+    <div className="segmented" role="group" aria-label="Recipient list"><button aria-pressed={view === 'all'} onClick={() => setView('all')}>All ({rows.length})</button><button aria-pressed={view === 'included'} onClick={() => setView('included')}>Selected ({included.length})</button><button aria-pressed={view === 'excluded'} onClick={() => setView('excluded')}>Excluded ({rows.length - included.length})</button></div>
     {included.some(row => row.requires_manager_review) && <p className="essential-note">Essential staff are selected. Confirm their instructions in the next step.</p>}
-    {visible.length ? <EmployeeTable rows={visible} busy={busy} scope={selection.scope} onToggle={onToggle} affectedStart={detail.affected_start} timezone={timezone} /> : <div className="small-empty">{view === 'included' ? emptyMessage : 'No excluded employees.'}</div>}
+    {busy && <p className="help" role="status">Updating selection…</p>}
+    {visible.length ? <EmployeeTable rows={visible} busy={busy} onToggle={onToggle} affectedStart={detail.affected_start} timezone={timezone} /> : <div className="small-empty">{view === 'included' ? emptyMessage : rows.length ? 'No excluded employees.' : 'No staff assigned to this facility.'}</div>}
   </>
 }
 
 function DecisionEvidence({ detail, timezone }) {
-  return <details className="disclosure"><summary>Evidence, confidence & policy</summary><p className="help">Confidence {detail.confidence.toFixed(2)} · qualitative estimate, not a probability. Actions follow the app's demo policy.</p>
-    <h3>Uncertainty</h3><p>{detail.alternatives.uncertainty || 'Requires manager review.'}</p><h3>What could change the recommendation</h3><ul>{detail.alternatives.what_would_change?.map((item, index) => <li key={index}>{item}</li>)}</ul>
-    <h3>Policy thresholds</h3><p className="help">App-defined demo thresholds, anchored to the guidance linked below. The agent explains the inputs; you choose the final action.</p>
-    <div className="table-scroll"><table><thead><tr><th>Rule</th><th>Trigger</th><th>Source value</th></tr></thead><tbody>{detail.thresholds.map((row, index) => <tr key={index}><td>{row.rule}<small>{row.policy_version}</small>{row.provenance && <small><a href={row.provenance} target="_blank" rel="noreferrer">Reference guidance ↗</a></small>}</td><td>{row.threshold}</td><td>{row.actual}<small>{row.margin}</small></td></tr>)}</tbody></table></div>
-    <h3>Source evidence</h3><div className="evidence-grid">{detail.evidence.map((row, index) => <article className="evidence" key={index}><a href={row.url} target="_blank" rel="noreferrer">{row.source} ↗</a><p className="help">{when(row.observed_at, timezone)}</p>
-      {row.value?.modeled && <Badge>Modeled AQI</Badge>}<details><summary>Source values</summary><pre>{JSON.stringify(row.value, null, 2)}</pre></details></article>)}</div>
+  return <details className="disclosure evidence-panel"><summary>Evidence & policy <span className="summary-meta">{detail.evidence.length} sources · Confidence {Math.round(detail.confidence * 100)}%</span></summary>
+    <p className="help">Confidence is a qualitative estimate, not a probability.</p>
+    <details className="disclosure"><summary>Sources ({detail.evidence.length})</summary>
+      <div className="evidence-grid">{detail.evidence.map((row, index) => <article className="evidence" key={index}>
+        <a href={row.url} target="_blank" rel="noreferrer">{row.source} ↗</a><p className="help">{when(row.observed_at, timezone)}</p>
+        {row.value?.modeled && <Badge>Modeled AQI</Badge>}<details><summary>Technical source data</summary><pre>{JSON.stringify(row.value, null, 2)}</pre></details>
+      </article>)}</div>
+    </details>
+    <details className="disclosure"><summary>Policy thresholds ({detail.thresholds.length})</summary>
+      <p className="help">Fixed demo rules with reference guidance. The agent explains; you decide.</p>
+      <div className="policy-list">{detail.thresholds.map((row, index) => <article key={index}>
+        <strong>{row.rule}</strong><p>{row.actual}<span className="muted"> · {row.margin}</span></p>
+        <details><summary>Trigger & reference</summary><p>{row.threshold}</p><p className="help">{row.policy_version}{row.provenance && <> · <a href={row.provenance} target="_blank" rel="noreferrer">Reference guidance ↗</a></>}</p></details>
+      </article>)}</div>
+    </details>
+    <details className="disclosure"><summary>Uncertainty & what could change</summary>
+      <p>{detail.alternatives.uncertainty || 'Requires manager review.'}</p>
+      <ul>{detail.alternatives.what_would_change?.map((item, index) => <li key={index}>{item}</li>)}</ul>
+    </details>
   </details>
 }
 
@@ -315,23 +329,24 @@ function RiskStep({ detail, form, busy, onEdit, onPosture, timezone }) {
   </>
 }
 
-function MessageStep({ detail, form, rows, busy, dirty, ready, essential, email, onEssential, onEdit, onSave, onDownload, onSend }) {
+function MessageStep({ detail, form, rows, busy, dirty, ready, essential, email, onEssential, onEdit, onSave, onDownload }) {
   const selected = rows.filter(row => row.included)
   const needsEssential = selected.some(row => row.requires_manager_review)
-  const submitted = detail.sent_at || ['IN_PROGRESS', 'UNKNOWN', 'PARTIAL', 'ACCEPTED'].includes(detail.delivery?.status)
+  const submitted = Boolean(detail.sent_at || ['PARTIAL', 'ACCEPTED'].includes(detail.delivery?.status))
+  const pending = ['IN_PROGRESS', 'UNKNOWN'].includes(detail.delivery?.status)
   return <><p className="eyebrow">STEP 3 OF 3</p><div className="section-head"><h2>Prepare your message</h2><Badge>{selected.length} recipient{selected.length === 1 ? '' : 's'}</Badge></div>
     <p className="help">Review the message, then approve and send it to the selected affected employees.</p>
     {form.posture !== detail.posture && <p className="essential-note">Your action changed. Update the message wording to match.</p>}
-    {!selected.length && <p className="essential-note">No recipients selected. Change the action in Risk to recalculate affected staff.</p>}
-    <form onSubmit={event => { event.preventDefault(); onSave(event.nativeEvent.submitter?.value || 'PENDING') }}><fieldset disabled={busy || !ready || submitted}>
+    {!selected.length && <p className="essential-note">No recipients selected. Choose employees in Recipients.</p>}
+    <form onSubmit={event => { event.preventDefault(); onSave(event.nativeEvent.submitter?.value || 'PENDING') }}><fieldset disabled={busy || !ready || pending}>
       <label>Subject<input maxLength="240" required value={form.draft_subject} onChange={event => onEdit('draft_subject', event.target.value)} /></label>
       <label>Message<textarea className="message-input" rows="9" maxLength="20000" required value={form.draft_body} onChange={event => onEdit('draft_body', event.target.value)} /></label>
       {needsEssential && <label className="check-notice"><input type="checkbox" checked={essential} onChange={event => onEssential(event.target.checked)} />I have confirmed instructions for the selected essential staff.</label>}
-      <div className="message-actions"><button className="primary" type="submit" value="APPROVED" disabled={!email?.ready || !selected.length || (needsEssential && !essential)}>{busy ? 'Approving and sending…' : 'Approve and send email'}</button><button type="submit" value="PENDING">Save draft</button>
-        <button className="text-button danger" type="submit" value="REJECTED">Reject</button></div>
+      <div className="message-actions"><button className="primary" type="submit" value="APPROVED" disabled={!email?.ready || !selected.length || (needsEssential && !essential)}>{busy ? 'Approving and sending…' : 'Approve and send email'}</button><button type="submit" value="PENDING" disabled={submitted}>Save draft</button>
+        <button className="text-button danger" type="submit" value="REJECTED" disabled={submitted}>Reject</button></div>
     </fieldset></form>
-    <div className="message-actions">{detail.manager_status === 'APPROVED' && <button className="primary" disabled={busy || dirty || !ready || !email?.ready || !selected.length || Boolean(submitted)} onClick={onSend}>{busy ? 'Working…' : 'Send employee emails'}</button>}
-      <button disabled={busy || dirty} onClick={onDownload}>Download saved message ↓</button></div>
+    <div className="message-actions secondary-actions"><button className="text-button" disabled={busy || dirty} onClick={onDownload}>Download saved message ↓</button></div>
+    {submitted && <p className="help">Already sent. You can edit and send again after confirmation.</p>}
     {email && !email.ready && <p className="help">Email sending is unavailable. You can save or download the message.</p>}
     {detail.delivery?.status && <p className="help" role="status">Employee email: {detail.delivery.status === 'ACCEPTED' ? 'Accepted by provider for delivery.' : label(detail.delivery.status)}{['UNKNOWN', 'PARTIAL', 'IN_PROGRESS'].includes(detail.delivery.status) && ' · Check provider activity before any further action.'}</p>}
     <p className="help" role="status">{dirty ? 'Unsaved changes · save before downloading.' : `Saved · ${label(detail.manager_status)}`}</p>
@@ -340,9 +355,13 @@ function MessageStep({ detail, form, rows, busy, dirty, ready, essential, email,
 
 function ReviewHistory({ detail, timezone }) {
   const original = detail.alternatives.original_recommendation
+  const deliveries = [...(detail.alternatives.delivery_history || []), ...(detail.delivery ? [{ delivery: detail.delivery }] : [])]
   return <details className="card history-panel"><summary>Decision record <span>#{detail.id}</span></summary>
     <p className="help">Checked {when(detail.evaluated_at, timezone)}{detail.reviewed_at && ` · Reviewed ${when(detail.reviewed_at, timezone)} by manager ${detail.reviewed_by}`}</p>
     {original && <details className="disclosure"><summary>Original recommendation · {label(original.posture)}</summary><p>{original.reason}</p></details>}
+    {deliveries.length > 0 && <details className="disclosure"><summary>Email submissions ({deliveries.length})</summary>
+      {deliveries.map(({ delivery }, index) => <p className="help" key={index}>{when(delivery.requested_at, timezone)} · {label(delivery.status)} · {delivery.accepted_employee_ids?.length || 0} employees accepted by provider</p>)}
+    </details>}
     {detail.alternatives.reviews?.length ? detail.alternatives.reviews.map((review, index) => <details className="disclosure" key={index}><summary>{label(review.status)} · {when(review.reviewed_at, timezone)}</summary><p>{review.reason}</p><strong>{review.draft_subject}</strong><p className="alert-description">{review.draft_body}</p></details>) : <p className="help">No manager review yet.</p>}
   </details>
 }
@@ -365,7 +384,7 @@ function DecisionDetails({ id, onDirtyChange, onNavigate }) {
     setDetail(value); setRows(value.recipients)
     setForm({ posture: value.posture, reason: value.reason, draft_subject: value.draft_subject, draft_body: value.draft_body })
     setSelection(value.alternatives.recipient_selection || audienceDefault())
-    setEssential(false); setDirty(false); setReady(true)
+    setEssential(Boolean(value.alternatives.reviews?.at(-1)?.essential_confirmed)); setDirty(false); setReady(true)
   }
   useEffect(() => {
     let active = true
@@ -380,7 +399,8 @@ function DecisionDetails({ id, onDirtyChange, onNavigate }) {
     try {
       const result = await api(`/decisions/${id}/recipients`, { method: 'POST', body: { ...next, posture } })
       if (recipientState(result) !== recipientState(rows) || JSON.stringify(next) !== JSON.stringify(selection)) setDirty(true)
-      setRows(result); setSelection(next); setEssential(false); setReady(true)
+      if (recipientState(result) !== recipientState(rows)) setEssential(false)
+      setRows(result); setSelection(next); setReady(true)
     } catch (error) { setError(error.message) } finally { setBusy(false) }
   }
   function toggle(empId, included) {
@@ -392,18 +412,21 @@ function DecisionDetails({ id, onDirtyChange, onNavigate }) {
     setForm(current => ({ ...current, posture,
       draft_subject: current.draft_subject.replace(current.posture.replaceAll('_', ' '), action),
       draft_body: current.draft_body.replace(/^Recommended action:.*$/m, `Recommended action: ${action}`) }))
-    setDirty(true); setNotice('')
+    setDirty(true); setNotice(''); setEssential(false)
     preview(audienceDefault(), posture)
   }
   function edit(key, value) { setForm(current => ({ ...current, [key]: value })); setDirty(true); setNotice('') }
   function changeStep(next) { setStep(next); if (next > 0) preview(selection) }
   async function save(status) {
     if (form.reason.trim().length < 20) { setError('Add a rationale of at least 20 characters in the Risk step.'); setStep(0); return }
-    if (!ready) return
+    if (!ready || busy) return
+    const repeat = Boolean(detail.sent_at || ['PARTIAL', 'ACCEPTED'].includes(detail.delivery?.status)
+      || detail.alternatives.delivery_history?.length || rows.some(row => row.included && row.previous_delivery))
+    if (status === 'APPROVED' && repeat && !window.confirm('Some selected employees have already received this notice. Approve and send again?')) return
     let reviewed = false
     setBusy(true); setError(''); setNotice('')
     try {
-      const result = await api(`/decisions/${id}/review`, { method: 'POST', body: { ...form, ...selection, status, essential_confirmed: essential } })
+      const result = await api(`/decisions/${id}/review`, { method: 'POST', body: { ...form, ...selection, status, essential_confirmed: essential, resend_confirmed: status === 'APPROVED' && repeat } })
       reviewed = true
       apply(result)
       if (status === 'APPROVED') await submitEmployeeEmails()
@@ -421,15 +444,6 @@ function DecisionDetails({ id, onDirtyChange, onNavigate }) {
   }
   async function refreshDelivery() {
     try { apply(await api(`/decisions/${id}`)) } catch { /* The server also blocks duplicate submissions. */ }
-  }
-  async function send() {
-    setBusy(true); setError(''); setNotice('')
-    try {
-      await submitEmployeeEmails()
-    } catch (error) {
-      setError(error.message)
-      await refreshDelivery()
-    } finally { setBusy(false) }
   }
   function download() {
     const recipients = detail.recipients.filter(row => row.included).map(row => row.email)
@@ -449,7 +463,7 @@ function DecisionDetails({ id, onDirtyChange, onNavigate }) {
     <section className="card review-panel" ref={stepPanel} tabIndex={-1} aria-busy={busy} aria-label={`${['Risk', 'Recipients', 'Message'][step]} review`}>
       {step === 0 && <RiskStep detail={detail} form={form} busy={busy} onEdit={edit} timezone={zone} onPosture={changePosture} />}
       {step === 1 && <RecipientStep rows={rows} selection={selection} busy={busy} detail={detail} timezone={zone} onPreview={preview} onToggle={toggle} />}
-      {step === 2 && <MessageStep detail={detail} form={form} rows={rows} busy={busy} dirty={dirty} ready={ready} essential={essential} email={email} onEssential={setEssential} onEdit={edit} onSave={save} onDownload={download} onSend={send} />}
+      {step === 2 && <MessageStep detail={detail} form={form} rows={rows} busy={busy} dirty={dirty} ready={ready} essential={essential} email={email} onEssential={setEssential} onEdit={edit} onSave={save} onDownload={download} />}
       <div className="step-actions">{step > 0 ? <button disabled={busy} onClick={() => changeStep(step - 1)}>← {step === 1 ? 'Risk' : 'Recipients'}</button> : <span className="help">You choose the final action.</span>}
         {step < 2 && <button className="primary" disabled={busy || !ready} onClick={() => changeStep(step + 1)}>{busy ? 'Updating recipients…' : `Continue to ${step === 0 ? 'recipients' : 'message'} →`}</button>}</div>
     </section><ReviewHistory detail={detail} timezone={zone} />

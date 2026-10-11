@@ -183,16 +183,25 @@ submissions remain excluded until their provider outcome is resolved.
 Changing the action also clears manual exclusions and freshly selects all eligible
 on-site staff for this decision's date/shift/window. An explicit return-to-normal
 override can notify those staff too. Essential instructions still need confirmation;
-remote/off-shift staff require the explicit facility-wide audience.
+managers can explicitly check remote/off-shift staff or choose Everyone at this
+facility, including during NORMAL operations.
 
 For later SMTP use, an explicit authenticated send API request after approval
 is required. The server reloads the current
 roster, checks approval/expiry/configuration and records delivery in the existing
-`decisions.delivery_json` and `sent_at`. Repeated sends are blocked; recipients
+`decisions.delivery_json` and `sent_at`. Direct duplicate submissions are blocked; recipients
 already submitted the same action for a covering window are unchecked. The latest
 submitted action is compared per employee, so a later different action can be
-notified. Partial or uncertain SMTP outcomes cannot be blindly retried. Provider
+notified. A manager can deliberately approve and send again after a confirmation.
+Prior completed deliveries, messages and recipient snapshots remain in
+`alternatives_json.delivery_history`; review history records resend consent.
+Pending or uncertain submissions still require resolution before retrying. Provider
 acceptance is recorded honestly; inbox delivery is not confirmed by SMTP.
+
+The review screen keeps sources, policy thresholds and uncertainty collapsed
+until requested. The recipient list opens with all staff visible and editable.
+Message has one **Approve and send email** button, which remains available after
+a completed send and asks for confirmation before sending again.
 
 ## Scope and policy
 
@@ -297,16 +306,16 @@ SELECT u.*, s.name AS shift_name, s.weekly_hours_json
 FROM users u
 LEFT JOIN shifts s ON s.id = u.shift_id
 WHERE u.location_id = ?
-  AND u.shift_id = ?  -- appended only for a shift-specific draft
 ORDER BY u.emp_id;
 ```
 
-The facility query binds `(location_id,)`; a shift-specific query adds the
-fixed SQL clause `AND u.shift_id = ?` and binds `(location_id, shift_id)`.
+The facility query binds `(location_id,)`. A shift-specific draft suggests only
+staff in that shift, but keeps the full facility roster visible so a manager can
+manually include another shift, remote staff, or unscheduled employees.
 The existing `idx_users_location` index restricts the roster before the join.
 Python then converts the risk window to the facility timezone, picks the actual
 weekday (`wed` on Wednesday), and reads that day's hours from the shift's JSON.
-It includes an employee only if the following interval has positive length:
+Automatic selection requires the following interval to have positive length:
 
 ```python
 max(risk_start, shift_start, office_open) < min(risk_end, shift_end, office_close)
@@ -322,7 +331,8 @@ Complex model JSON is parsed and validated with `AgentAdvice` / `WeeklyAdvice`.
 Dates must match the supplied covered dates, posture must match policy, and
 canonical evidence/times are attached by the backend. SQL never compares the
 entire JSON, searches the explanation for weekdays, or executes model-generated
-SQL. Filtering uses only facility/shift IDs, validated posture and exact instants.
+SQL. Automatic filtering uses facility/shift IDs, validated posture and exact instants;
+manual selections remain restricted to staff assigned to the manager's facility.
 A malformed response or conflicting posture prevents saving decisions.
 
 The weekly path loads the roster once and decodes each distinct shift once per

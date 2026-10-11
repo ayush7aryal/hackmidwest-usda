@@ -54,7 +54,7 @@ def test_same_operation_keeps_unnotified_affected_staff_selected(client, headers
     assert {r['emp_id'] for r in detail['recipients'] if r['included']}=={1101,1102,1104,1105}
     url=f"/api/decisions/{detail['id']}"
     same=client.post(url+'/recipients',headers=headers,json={'scope':'all_staff'}).json()
-    assert len([r for r in same if r['included']])==6
+    assert len([r for r in same if r['included']])==7
     rows=client.post(url+'/recipients',headers=headers,json={'posture':'CLOSED'}).json()
     assert {r['emp_id'] for r in rows if r['included']}=={1101,1102,1104,1105}
     approve(client,headers,detail)
@@ -106,16 +106,19 @@ def test_previously_notified_subset_does_not_hide_other_affected_staff(client, h
     assert next(r for r in detail['recipients'] if r['emp_id']==1101)['reason']=='already_notified'
 
 
-def test_normal_automatic_action_has_no_audience_even_with_all_staff_scope(client, headers, evaluated, db_path, provider):
+def test_normal_has_no_default_audience_but_manager_can_select_everyone(client, headers, evaluated, db_path, provider):
     with closing(connect(db_path)) as db, db:
         alt=json.loads(db.execute('SELECT alternatives_json FROM decisions WHERE id=?',(evaluated['id'],)).fetchone()[0])
         alt['original_recommendation']['posture']='NORMAL'
         db.execute("UPDATE decisions SET posture='NORMAL',alternatives_json=? WHERE id=?",(json.dumps(alt),evaluated['id']))
     detail=client.get(f"/api/decisions/{evaluated['id']}",headers=headers).json()
+    url=f"/api/decisions/{detail['id']}"
+    rows=client.post(url+'/recipients',headers=headers,json={}).json()
+    assert not any(r['included'] for r in rows)
     saved=approve(client,headers,detail,scope='all_staff')
-    assert not any(r['included'] for r in saved['recipients'])
-    assert client.post(f"/api/decisions/{detail['id']}/send",headers=headers).status_code==409
-    assert not provider
+    assert sum(r['included'] for r in saved['recipients'])==7
+    assert saved['alternatives']['notification']=={'required':True,'reason':'manager_override'}
+    assert client.post(url+'/send',headers=headers).json()['status']=='ACCEPTED'
 
 
 def test_explicit_return_to_normal_notifies_scheduled_staff(client, headers, evaluated, provider):
@@ -208,3 +211,85 @@ def test_real_smtp_adapter_requires_tls_and_does_not_retry(monkeypatch, provider
     message,targets=email_delivery.delivery_message(config,{'id':1,'draft_subject':'Test','draft_body':'Test'},[{'email':'staff@example.com'}])
     assert REAL_SUBMIT(config,message,targets)=={}
     assert events==['connect','ehlo','tls','ehlo','login','submit','close']
+
+
+def test_confirmed_resend_preserves_delivery_history_and_guards_each_submission(client, headers, evaluated, provider):
+    url=f"/api/decisions/{evaluated['id']}"
+    approve(client,headers,evaluated)
+    first=client.post(url+'/send',headers=headers).json()
+    assert first['status']=='ACCEPTED'
+    for attempt in range(2):
+        assert client.post(url+'/review',headers=headers,json=payload(evaluated)).status_code==409
+        saved=approve(client,headers,evaluated,resend_confirmed=True,draft_body=f'Updated demo notice {attempt}')
+        assert len(saved['alternatives']['delivery_history'])==attempt+1
+        assert saved['alternatives']['delivery_history'][0]['delivery']==first
+        assert saved['alternatives']['delivery_history'][0]['draft_body']=='Manager edited message'
+        assert client.post(url+'/send',headers=headers).json()['status']=='ACCEPTED'
+        assert client.post(url+'/send',headers=headers).status_code==409
+    assert len(provider)==3
+    assert len({str(call[1]['Message-ID']) for call in provider})==3
+
+
+def test_manual_staff_selection_overrides_normal_remote_and_unscheduled_defaults(client, headers, evaluated, db_path, provider):
+    with closing(connect(db_path)) as db, db:
+        alt=evaluated['alternatives']
+        alt['original_recommendation']['posture']='NORMAL'
+        db.execute("UPDATE decisions SET posture='NORMAL',alternatives_json=? WHERE id=?",(json.dumps(alt),evaluated['id']))
+    detail=client.get(f"/api/decisions/{evaluated['id']}",headers=headers).json()
+    saved=approve(client,headers,detail,include_ids=[1103,1106])
+    assert {r['emp_id'] for r in saved['recipients'] if r['included']}=={1103,1106}
+    assert client.post(f"/api/decisions/{detail['id']}/send",headers=headers).json()['status']=='ACCEPTED'
+
+
+def test_manual_previously_notified_selection_requires_confirmation(client, headers, evaluated, db_path, provider):
+    approve(client,headers,evaluated)
+    client.post(f"/api/decisions/{evaluated['id']}/send",headers=headers)
+    result=evaluator.evaluate(db_path,1,1001)
+    url=f"/api/decisions/{result['decision_id']}"
+    detail=client.get(url,headers=headers).json()
+    rows=client.post(url+'/recipients',headers=headers,json={'include_ids':[1101]}).json()
+    selected=next(r for r in rows if r['emp_id']==1101)
+    assert selected['included'] and selected['previous_delivery']=='already_notified'
+    assert client.post(url+'/review',headers=headers,json=payload(detail,include_ids=[1101])).status_code==409
+    approve(client,headers,detail,include_ids=[1101],resend_confirmed=True)
+    assert client.post(url+'/send',headers=headers).json()['status']=='ACCEPTED'
+
+
+def test_archived_success_still_prevents_automatic_duplicate_after_failed_resend(client, headers, evaluated, db_path, provider, monkeypatch):
+    approve(client,headers,evaluated)
+    url=f"/api/decisions/{evaluated['id']}"
+    client.post(url+'/send',headers=headers)
+    approve(client,headers,evaluated,resend_confirmed=True)
+    def failed(*args):
+        raise email_delivery.SMTPSetupError('test failure')
+    monkeypatch.setattr(email_delivery,'submit_smtp',failed)
+    assert client.post(url+'/send',headers=headers).json()['status']=='FAILED'
+    result=evaluator.evaluate(db_path,1,1001)
+    rows=client.get(f"/api/decisions/{result['decision_id']}",headers=headers).json()['recipients']
+    assert not any(r['included'] for r in rows)
+    assert {r['emp_id'] for r in rows if r['reason']=='already_notified'}=={1101,1102,1104,1105}
+
+
+@pytest.mark.parametrize('status',['IN_PROGRESS','UNKNOWN'])
+def test_resend_confirmation_cannot_reset_pending_delivery(client, headers, evaluated, db_path, provider, status):
+    with closing(connect(db_path)) as db, db:
+        db.execute('UPDATE decisions SET delivery_json=? WHERE id=?',
+                   (json.dumps({'status':status,'intended_employee_ids':[1101]}),evaluated['id']))
+    url=f"/api/decisions/{evaluated['id']}"
+    assert client.post(url+'/review',headers=headers,json=payload(evaluated,resend_confirmed=True)).status_code==409
+    result=evaluator.evaluate(db_path,1,1001)
+    other=f"/api/decisions/{result['decision_id']}"
+    detail=client.get(other,headers=headers).json()
+    assert client.post(other+'/review',headers=headers,json=payload(detail,include_ids=[1101],resend_confirmed=True)).status_code==409
+    assert not provider
+
+
+def test_confirmed_resend_still_rechecks_new_uncertain_submission_before_dispatch(client, headers, evaluated, db_path, provider):
+    approve(client,headers,evaluated,include_ids=[1101],resend_confirmed=True)
+    second=evaluator.evaluate(db_path,1,1001)
+    with closing(connect(db_path)) as db, db:
+        db.execute('UPDATE decisions SET delivery_json=? WHERE id=?',
+                   (json.dumps({'status':'UNKNOWN','intended_employee_ids':[1101]}),second['decision_id']))
+    result=client.post(f"/api/decisions/{evaluated['id']}/send",headers=headers)
+    assert result.status_code==409
+    assert not provider

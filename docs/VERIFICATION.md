@@ -1,5 +1,32 @@
 # MVP verification — October 10, 2026
 
+Minimal review and manager audience controls (supersedes older selection restrictions):
+
+- Evidence now opens to collapsed Sources, Policy thresholds, and Uncertainty
+  sections. Source times, reference guidance and raw values remain inspectable.
+- All facility staff are visible in Recipients. Managers can check/uncheck remote,
+  unscheduled or other-shift staff. Everyone at this facility includes all staff,
+  including managers, even for NORMAL. Automatic affected-shift defaults and
+  facility ownership checks remain enforced.
+- One Approve and send email button remains reusable after completed sends.
+  Resends require explicit confirmation; the original delivery, message and
+  roster are preserved in decision JSON. Pending/unknown submissions cannot be
+  reset by this confirmation. Essential instructions still require confirmation.
+- 280 backend tests and 34 frontend DOM tests passed, plus the production build.
+  Tests cover manual selections, normal facility-wide notices, repeat sending,
+  confirmation cancellation, delivery history and duplicate/concurrent guards.
+  Provider requests are mocked; these tests send no real email.
+- Rebuilt local and Akamai containers; trusted HTTPS, email readiness, database
+  integrity and foreign keys passed. The deployment retained 13 facilities,
+  111 users, nine shifts and 129 decisions, with a consistent backup under
+  `/root/facility-backups/before-minimal-review-*.db`.
+- Live read-only checks passed for normal decision #100 (seven facility staff)
+  and telework decision #114 (17 facility staff; two suggested on-site employees).
+  Facility-wide selection, individual inclusion/exclusion and foreign-ID rejection
+  passed without changing saved decisions or sending emails. Local normal #91
+  also passed. Frontend asset: `/assets/index-C1bbi3AM.js`.
+
+
 Affected-recipient selection correction (supersedes unchanged-operation notes):
 
 - Identified the live failure in Jacksonville decision #114: two employees were

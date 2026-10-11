@@ -132,6 +132,7 @@ class EmployeeRecipient(Employee):
     included: bool
     reason: str
     requires_manager_review: bool
+    previous_delivery: Literal['already_notified', 'delivery_uncertain'] | None = None
     warning: str | None
 
 
@@ -238,6 +239,7 @@ class ReviewRequest(RecipientSelection):
     draft_subject: str = Field(min_length=1, max_length=240)
     draft_body: str = Field(min_length=1, max_length=20000)
     essential_confirmed: bool = False
+    resend_confirmed: bool = False
 
     @field_validator("draft_subject")
     @classmethod

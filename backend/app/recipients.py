@@ -102,11 +102,10 @@ def filter_roster(
     if posture not in get_args(Posture) or scope not in ("affected", "all_staff"):
         raise ValueError("Invalid posture or recipient scope")
     intervals = selection_intervals(start, end, impact_windows)
-    rows = [row for row in roster if row["location_id"] == location["id"]
-            and (shift_id is None or row["shift_id"] == shift_id)]
+    rows = [row for row in roster if row["location_id"] == location["id"]]
     included, excluded = set(include_ids or []), set(exclude_ids or [])
     if included & excluded or not (included | excluded) <= {row["emp_id"] for row in rows}:
-        raise ValueError("Selections must be disjoint employee IDs belonging to this facility and shift")
+        raise ValueError("Selections must be disjoint employee IDs belonging to this facility")
     matches, result = {}, []
     for row in rows:
         employee = dict(row)
@@ -119,14 +118,15 @@ def filter_roster(
             except (ValueError, TypeError, AttributeError):
                 matches[employee["shift_id"]] = (False, True)
         overlap, invalid = matches[employee["shift_id"]]
-        reason = "invalid_shift" if invalid and scope == "affected" else eligibility(employee, overlap, posture, scope, included)
+        if shift_id is not None and employee['shift_id'] != shift_id:
+            overlap = False
+        reason = ("invalid_shift" if invalid and scope == "affected" and employee["emp_id"] not in included
+                  else eligibility(employee, overlap, posture, scope, included))
         if invalid:
             employee["weekly_hours"] = None
         if employee["emp_id"] in excluded:
             reason = "manager_excluded"
         eligible = reason in ("scheduled_on_site", "facility_wide", "manager_selected")
-        if employee["emp_id"] in included and not eligible:
-            raise ValueError("Unscheduled/remote staff require the facility-wide scope; invalid shifts require correction")
         result.append(employee | {"included": eligible, "reason": reason,
             "requires_manager_review": bool(eligible and employee["is_essential"]),
             "warning": "Essential personnel: manager must explicitly confirm instructions." if eligible and employee["is_essential"] else None})
@@ -139,16 +139,18 @@ def select_recipients(
     shift_id: int | None = None, impact_windows: list[dict] | None = None,
 ) -> list[dict]:
     """Fresh one-query selection for an individual draft or manager review."""
-    return filter_roster(load_roster(db, location["id"], shift_id), location, start, end, posture,
+    return filter_roster(load_roster(db, location["id"]), location, start, end, posture,
                          scope, include_ids, exclude_ids, shift_id, impact_windows)
 
 
 def eligibility(employee: dict, overlap: bool, posture: str, scope: str, selected: set[int]) -> str:
     """Wider safety notices are explicit; ordinary commute notices exclude remote/unscheduled staff."""
-    if employee["is_manager"] and employee["emp_id"] not in selected:
-        return "manager"
+    if employee["emp_id"] in selected:
+        return "manager_selected"
     if scope == "all_staff":
-        return "manager_selected" if employee["is_manager"] else "facility_wide"
+        return "facility_wide"
+    if employee["is_manager"]:
+        return "manager"
     if posture == "NORMAL":
         return "no_disruption"
     if not overlap:

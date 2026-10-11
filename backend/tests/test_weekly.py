@@ -158,12 +158,15 @@ def test_seven_unavailable_days_do_not_call_model_or_save(client, headers, db_pa
         assert db.execute('SELECT COUNT(*) FROM decisions').fetchone()[0] == 0
 
 
-def test_group_review_stays_in_its_shift_and_essential_staff_need_confirmation(client, headers, weekly_sources):
+def test_group_defaults_to_its_shift_but_manager_can_add_other_facility_staff(client, headers, weekly_sources):
     result = evaluate_week(client, headers)
     groups = next(day['message_groups'] for day in result['days'] if day['date'] == '2026-10-14')
     early = next(group for group in groups if group['shift_id'] == 1)
     late = next(group for group in groups if group['shift_id'] == 2)
-    assert client.post(f"/api/decisions/{early['decision_id']}/recipients", headers=headers, json={'include_ids': [1102]}).status_code == 422
+    manual = client.post(f"/api/decisions/{early['decision_id']}/recipients", headers=headers, json={'include_ids': [1102]}).json()
+    assert next(row for row in manual if row['emp_id'] == 1102)['included']
+    default = client.post(f"/api/decisions/{early['decision_id']}/recipients", headers=headers, json={}).json()
+    assert not next(row for row in default if row['emp_id'] == 1102)['included']
     preview = client.post(f"/api/decisions/{late['decision_id']}/recipients", headers=headers, json={}).json()
     assert {row['emp_id'] for row in preview if row['included']} == {1102, 1105}
     payload = {'status': 'APPROVED', 'posture': 'TELEWORK', 'reason': 'TEST ONLY manager approved this shift-specific action.',
@@ -289,7 +292,7 @@ def test_weekly_selection_uses_one_roster_query_and_saved_counts_match(db_path, 
                 row = db.execute('SELECT recipients_json FROM decisions WHERE id=?', (group['decision_id'],)).fetchone()
                 saved = json.loads(row[0])
                 assert group['recipient_count'] == sum(item['included'] for item in saved)
-                assert all(item['shift_id'] == group['shift_id'] for item in saved)
+                assert all(item['shift_id'] == group['shift_id'] for item in saved if item['included'])
 
 
 def test_mixed_overlapping_hazards_use_strongest_action_and_preserve_safe_gap():

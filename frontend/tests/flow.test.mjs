@@ -49,17 +49,19 @@ function makeFixture() {
 
 function previewRows(body) {
   return fixture.decision.recipients.map(row => {
-    const eligible = body.scope === 'all_staff' || ((body.posture !== 'NORMAL' || body.posture !== fixture.decision.alternatives.original_recommendation.posture) && !row.is_teleworking && row.weekly_hours.wed)
+    const manual = body.scope === 'all_staff' || body.include_ids?.includes(row.emp_id)
+    const eligible = manual || ((body.posture !== 'NORMAL' || body.posture !== fixture.decision.alternatives.original_recommendation.posture) && !row.is_teleworking && row.weekly_hours.wed)
     const blocked = ['already_notified', 'delivery_uncertain'].includes(row.reason)
-    const included = Boolean(eligible && !blocked && !body.exclude_ids?.includes(row.emp_id))
+    const included = Boolean(eligible && (!blocked || manual) && !body.exclude_ids?.includes(row.emp_id))
     return { ...row, included, requires_manager_review: included && row.is_essential,
-      reason: blocked ? row.reason : body.exclude_ids?.includes(row.emp_id) ? 'manager_excluded' : included ? 'scheduled_on_site' : row.is_teleworking ? 'already_remote' : 'not_scheduled' }
+      ...(blocked && manual ? { previous_delivery: row.reason } : {}),
+      reason: blocked && !manual ? row.reason : body.exclude_ids?.includes(row.emp_id) ? 'manager_excluded' : included ? 'scheduled_on_site' : row.is_teleworking ? 'already_remote' : 'not_scheduled' }
   })
 }
 
 beforeEach(() => {
   fixture = makeFixture(); requests = []; failPreview = false; failWeek = false; failAlerts = false; downloadBlob = null; downloadName = null
-  emailReady = true; sendStatus = 'ACCEPTED'; failReview = false
+  emailReady = true; sendStatus = 'ACCEPTED'; failReview = false; window.confirm = () => false
   window.history.replaceState(null, '', '/')
   sessionStorage.clear(); sessionStorage.setItem('facility_token', 'synthetic-token'); sessionStorage.setItem('facility_manager', 'Synthetic Manager')
   document.body.innerHTML = '<div id="root"></div>'
@@ -87,7 +89,7 @@ beforeEach(() => {
     if (path === '/api/decisions/14/review') {
       if (failReview) return response({ detail: 'Staff selection changed; review again.' }, 409)
       if (body.status === 'APPROVED' && !body.essential_confirmed) return response({ detail: 'Essential confirmation required' }, 422)
-      fixture.decision = { ...fixture.decision, ...body, manager_status: body.status, recipients: previewRows(body), alternatives: { ...fixture.decision.alternatives, recipient_selection: { scope: body.scope, include_ids: body.include_ids, exclude_ids: body.exclude_ids } } }
+      fixture.decision = { ...fixture.decision, ...body, manager_status: body.status, recipients: previewRows(body), alternatives: { ...fixture.decision.alternatives, reviews: [...(fixture.decision.alternatives.reviews || []), { essential_confirmed: body.essential_confirmed }], recipient_selection: { scope: body.scope, include_ids: body.include_ids, exclude_ids: body.exclude_ids } } }
       return response(fixture.decision)
     }
     if (path === '/api/locations/1' && options.method === 'PATCH') { fixture.office = { ...fixture.office, ...body }; fixture.week = null; fixture.alerts = []; return response(fixture.office) }
@@ -178,12 +180,12 @@ test('three-step review keeps excluded staff available and shows only affected-d
   assert.equal(document.querySelector('.message-input'), null)
   assert.equal(document.querySelector('.disclosure').open, false)
   await click(button('Continue to recipients →'))
-  assert.equal(document.querySelectorAll('tbody tr').length, 2)
+  assert.equal(document.querySelectorAll('tbody tr').length, 4)
   assert.match(document.querySelector('tbody').textContent, /wed 08:00–16:00/)
   assert.equal(document.querySelector('tbody').textContent.includes('thu'), false)
   await click(button('Excluded (2)'))
   assert.match(document.querySelector('tbody').textContent, /Riley Remote/)
-  assert.equal(document.querySelector('[aria-label="Include Riley Remote"]').disabled, true)
+  assert.equal(document.querySelector('[aria-label="Include Riley Remote"]').disabled, false)
   await change(document.querySelector('select'), 'all_staff')
   assert.equal(document.querySelectorAll('tbody tr').length, 4)
   assert.equal(document.querySelector('[aria-label="Include Riley Remote"]').disabled, false)
@@ -394,7 +396,7 @@ test('normal operations leave recipients unchecked and a manager override resets
   assert.equal(button('Approve and send email').disabled, true)
 })
 
-test('approve and send submits review first, sends once and blocks repeat sending', async () => {
+test('one approve and send button submits review first and remains enabled after acceptance', async () => {
   await mount('#decision/14'); await click(button('Continue to recipients →')); await click(button('Continue to message →'))
   assert.equal(requests.filter(item => item.path.endsWith('/send')).length, 0)
   await click(document.querySelector('.check-notice input'))
@@ -402,9 +404,11 @@ test('approve and send submits review first, sends once and blocks repeat sendin
   assert.equal(fixture.decision.manager_status, 'APPROVED')
   const actions = requests.filter(item => /\/(review|send)$/.test(item.path))
   assert.deepEqual(actions.map(item => item.path), ['/api/decisions/14/review', '/api/decisions/14/send'])
-  assert.equal(button('Send employee emails').disabled, true)
+  assert.equal([...document.querySelectorAll('button')].some(item => item.textContent === 'Send employee emails'), false)
   assert.match(document.querySelector('.success').textContent, /accepted by the provider/)
   assert.equal(button('Download saved message ↓').disabled, false)
+  assert.equal(button('Approve and send email').matches(':disabled'), false)
+  assert.equal([...document.querySelectorAll('button')].filter(item => item.textContent === 'Approve and send email').length, 1)
   await click(button('Download saved message ↓'))
   assert.equal(downloadName, 'decision-14-approved.txt')
   assert(downloadBlob)
@@ -438,7 +442,7 @@ test('uncertain combined sending shows a failure and disables duplicate submissi
   assert.equal(fixture.decision.manager_status, 'APPROVED')
   assert.match(document.querySelector('[role=alert]').textContent, /email status is UNKNOWN/)
   assert.equal(button('Approve and send email').matches(':disabled'), true)
-  assert.equal(button('Send employee emails').disabled, true)
+  assert.equal([...document.querySelectorAll('button')].some(item => item.textContent === 'Send employee emails'), false)
   assert.equal(requests.filter(item => item.path.endsWith('/send')).length, 1)
 })
 
@@ -482,15 +486,77 @@ test('select affected staff clears manual exclusions and keeps remote staff unch
   assert.deepEqual(requests.filter(item => item.path.endsWith('/recipients')).at(-1).body.exclude_ids, [])
   await click(button('Excluded (2)'))
   assert.equal(document.querySelector('[aria-label="Include Riley Remote"]').checked, false)
-  assert.equal(document.querySelector('[aria-label="Include Riley Remote"]').disabled, true)
+  assert.equal(document.querySelector('[aria-label="Include Riley Remote"]').disabled, false)
 })
 
-test('submitted and unresolved recipients cannot be rechecked through a wider audience', async () => {
+test('manager can select previously submitted employees through a wider audience', async () => {
   fixture.decision.recipients[0] = { ...fixture.decision.recipients[0], included: false, reason: 'already_notified' }
   fixture.decision.recipients[1] = { ...fixture.decision.recipients[1], included: false, reason: 'delivery_uncertain' }
   await mount('#decision/14'); await click(button('2Recipients'))
   await change(document.querySelector('select'), 'all_staff')
-  await click(button('Excluded (2)'))
-  assert.equal(document.querySelector('[aria-label="Include Casey Demo"]').disabled, true)
-  assert.equal(document.querySelector('[aria-label="Include Avery Demo"]').disabled, true)
+  assert.equal(document.querySelector('[aria-label="Include Casey Demo"]').disabled, false)
+  assert.equal(document.querySelector('[aria-label="Include Avery Demo"]').checked, true)
+})
+
+test('manager can check remote and unscheduled employees without changing audience', async () => {
+  await mount('#decision/14'); await click(button('2Recipients'))
+  for (const name of ['Riley Remote', 'Robin Off']) {
+    const checkbox = document.querySelector(`[aria-label="Include ${name}"]`)
+    assert.equal(checkbox.disabled, false)
+    await click(checkbox)
+    assert.equal(document.querySelector(`[aria-label="Include ${name}"]`).checked, true)
+  }
+  assert(button('Selected (4)'))
+  await click(document.querySelector('[aria-label="Include Robin Off"]'))
+  assert.equal(document.querySelector('[aria-label="Include Robin Off"]').checked, false)
+  const request = requests.filter(item => item.path.endsWith('/recipients')).at(-1)
+  assert.deepEqual(request.body.include_ids, [1103])
+  assert.deepEqual(request.body.exclude_ids, [1106])
+})
+
+test('everyone at facility remains checked on normal operations across review steps', async () => {
+  fixture.decision.posture = 'NORMAL'
+  fixture.decision.alternatives.original_recommendation.posture = 'NORMAL'
+  await mount('#decision/14'); await click(button('2Recipients'))
+  assert(button('Selected (0)'))
+  await change(document.querySelector('select'), 'all_staff')
+  assert.equal(document.querySelector('select').value, 'all_staff')
+  assert.equal([...document.querySelectorAll('tbody input')].every(item => item.checked), true)
+  await click(button('3Message')); await click(document.querySelector('.check-notice input'))
+  await click(button('Approve and send email'))
+  assert.equal(requests.filter(item => item.path.endsWith('/send')).length, 1)
+  await click(button('2Recipients'))
+  assert.equal(document.querySelector('select').value, 'all_staff')
+  assert(button('Selected (4)'))
+})
+
+test('repeat demo sends require confirmation and the single button stays reusable', async () => {
+  await mount('#decision/14'); await click(button('3Message')); await click(document.querySelector('.check-notice input'))
+  await click(button('Approve and send email'))
+  assert.equal(button('Approve and send email').matches(':disabled'), false)
+  await click(button('Approve and send email'))
+  assert.equal(requests.filter(item => item.path.endsWith('/send')).length, 1)
+  let confirmations = 0
+  window.confirm = () => { confirmations++; return true }
+  await change(document.querySelector('.message-input'), 'Updated demo instructions.')
+  await click(button('Approve and send email'))
+  await click(button('Approve and send email'))
+  assert.equal(requests.filter(item => item.path.endsWith('/send')).length, 3)
+  assert.equal(confirmations, 2)
+  assert.equal(requests.filter(item => item.path.endsWith('/review')).at(-1).body.resend_confirmed, true)
+  assert.equal(button('Approve and send email').matches(':disabled'), false)
+})
+
+test('evidence opens to concise choices with technical detail collapsed', async () => {
+  fixture.decision.evidence = [{ source: 'NWS', url: 'https://api.weather.gov/test', observed_at: '2026-10-14T12:00:00Z', value: { wind: '45 mph' } }]
+  fixture.decision.thresholds = [{ rule: 'Wind', threshold: '40 mph', actual: '45 mph', margin: '+5 mph', policy_version: 'demo-office-v3' }]
+  await mount('#decision/14')
+  const panel = document.querySelector('.evidence-panel')
+  assert.equal(panel.open, false)
+  assert.match(panel.querySelector('summary').textContent, /1 sources · Confidence 50%/)
+  await click(panel.querySelector('summary'))
+  assert.equal(panel.open, true)
+  assert.equal([...panel.querySelectorAll('details')].every(item => !item.open), true)
+  assert.equal(outsideClosedDetails(panel.querySelector('pre')), false)
+  assert.equal(outsideClosedDetails(panel.querySelector('.policy-list')), false)
 })

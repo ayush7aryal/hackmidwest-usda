@@ -14,7 +14,7 @@ from fastapi import HTTPException
 
 from app.db import utc_now
 from app.models import RecipientSelection, ReviewRequest
-from app.notification_rules import already_notified
+from app.notification_rules import delivery_blocks
 from app.review import owned_decision, recipient_preview, validate_approval
 from app.sendgrid_delivery import SendGridResponseError, submit_sendgrid
 
@@ -153,7 +153,8 @@ def approved_recipients(db, row: dict, location: dict) -> list[dict]:
     validate_approval(row, location, alternatives, fresh, body)
     if not recipients:
         raise HTTPException(409, "No eligible recipients: normal operations, no affected staff, or prior email submissions")
-    if already_notified(db, row, recipients):
+    blocked = delivery_blocks(db, row, recipients)
+    if 'delivery_uncertain' in blocked.values() or (blocked and not review.get('resend_confirmed', False)):
         raise HTTPException(409, "Some recipients already received this action or have an unresolved submission for this window; refresh and approve again")
     return recipients
 

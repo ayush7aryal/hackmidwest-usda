@@ -240,3 +240,13 @@ pre { font-size: .74rem; line-height: 1.6; background: #f5f7f1; padding: 14px; o
 @keyframes spin { to { transform: rotate(360deg); } }
 @media (prefers-reduced-motion: reduce) { .spinner { animation: none; border-top-color: #176047; } }
 @media (max-width: 700px) { .map-search { flex-direction: column; align-items: stretch; } .facility-map-section { padding: .8rem; } .facility-map { height: 280px; } }
+
+.summary-meta { color: #67766b; font-size: .75rem; font-weight: 400; margin-left: 8px; }
+.evidence-panel > .disclosure { padding: 12px 0; }
+.evidence-panel .evidence-grid { grid-template-columns: 1fr; }
+.evidence-panel .evidence { border: 0; border-bottom: 1px solid #edf1e6; border-radius: 0; padding: 8px 0 14px; }
+.policy-list article { padding: 12px 0; border-bottom: 1px solid #edf1e6; font-size: .85rem; }
+.policy-list article > p { margin: 5px 0; }
+.policy-list summary { font-size: .78rem; color: #67766b; }
+.secondary-actions { margin-top: 15px; }
+@media (max-width: 700px) { .summary-meta { display: block; margin: 5px 0 0 16px; } }

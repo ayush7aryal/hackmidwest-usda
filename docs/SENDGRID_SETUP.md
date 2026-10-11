@@ -98,7 +98,9 @@ Real delivery needs the account key, a verified sender and a live provider test.
 
 Selecting **Affected on-site employees** reloads the facility roster and matches
 actual shift dates/hours against the decision's impact windows. Remote and
-unscheduled staff remain excluded. A repeated non-normal recommendation alone
+unscheduled staff are excluded by default, but managers can check them manually.
+**Everyone at this facility** checks all staff, including managers, even for NORMAL
+operations. Explicit exclusions are preserved on refresh and review. A repeated non-normal recommendation alone
 never clears the selection: employees remain eligible until a real employee
 submission is recorded. Manager review emails do not count as employee delivery.
 Prior accepted recipients are excluded individually for the same action and a
@@ -109,3 +111,14 @@ Use **Select affected staff** to clear manual exclusions and recalculate the
 eligible audience. **Refresh staff** preserves explicit selections/exclusions.
 Previously saved decisions with the old `unchanged_operation` suppression recover
 when their Recipients step is refreshed; audit snapshots are not rewritten.
+
+## Deliberate demo resends
+
+Message has one **Approve and send email** button. After provider acceptance it
+remains usable, with a confirmation before another send. The API requires
+`resend_confirmed: true` on that approval; a direct duplicate `/send` still returns
+409. Earlier deliveries, message text and recipient snapshots are archived in the
+existing decision JSON and visible as Email submissions in the decision record.
+Explicitly selecting a previously notified employee also requires confirmation.
+Pending or uncertain provider submissions must be resolved before another send.
+No new database tables are introduced.

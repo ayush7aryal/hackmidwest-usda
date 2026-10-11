@@ -47,7 +47,7 @@ def test_midnight_window_matches_the_correct_next_day(db_path):
 
 def test_facility_wide_explicitly_includes_remote_unscheduled_staff(db_path):
     rows = selection(db_path, scope="all_staff")
-    assert len([row for row in rows if row["included"]]) == 6
+    assert len([row for row in rows if row["included"]]) == 7
     assert all(row["reason"] == "facility_wide" for row in rows if not row["is_manager"])
     assert len([row for row in selection(db_path, scope="all_staff", include_ids=[1001]) if row["included"]]) == 7
 
@@ -55,7 +55,7 @@ def test_facility_wide_explicitly_includes_remote_unscheduled_staff(db_path):
 def test_manager_overrides_and_ownership_are_validated(db_path):
     assert next(row for row in selection(db_path, exclude_ids=[1101]) if row["emp_id"] == 1101)["reason"] == "manager_excluded"
     for options in ({"include_ids": [2101]}, {"exclude_ids": [2101]},
-                    {"include_ids": [1101], "exclude_ids": [1101]}, {"include_ids": [1103]}):
+                    {"include_ids": [1101], "exclude_ids": [1101]}):
         with pytest.raises(ValueError):
             selection(db_path, **options)
 
@@ -150,3 +150,12 @@ def test_interval_normalization_merges_duplicates_without_filling_gaps():
     intervals = selection_intervals('2026-10-14T13:00:00Z', '2026-10-14T23:00:00Z', windows)
     assert len(intervals) == 2
     assert (intervals[1][0] - intervals[0][1]).total_seconds() == 8*3600
+
+
+def test_manual_selection_includes_remote_unscheduled_and_invalid_schedule_staff(db_path):
+    rows=selection(db_path,include_ids=[1103,1106])
+    assert all(row['included'] and row['reason']=='manager_selected' for row in rows if row['emp_id'] in [1103,1106])
+    with closing(connect(db_path)) as db, db:
+        db.execute("UPDATE shifts SET weekly_hours_json='bad JSON' WHERE id=1")
+    row=next(row for row in selection(db_path,include_ids=[1101]) if row['emp_id']==1101)
+    assert row['included'] and row['weekly_hours'] is None
