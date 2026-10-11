@@ -317,8 +317,10 @@ model failures retain the last good recommendation and remain due for retry.
 facilities. Keep one API worker; no host cron or extra service is required.
 
 Production enables `MANAGER_SCHEDULED_UPDATES_ENABLED=true`: each completed
-scheduled refresh emails its assigned managers a summary and dashboard link,
-including unchanged and NORMAL statuses. Manual daily checks retain the
+non-normal scheduled refresh emails its assigned managers a summary and dashboard
+link, even when the non-normal status is unchanged. NORMAL results update the
+database without automatically emailing managers, including returns to NORMAL.
+Manual daily checks retain the
 NORMAL-to-disruption alert rule. Employee emails still require manager approval.
 Weekly planning prepares dated drafts; it does not change the daily status.
 The open dashboard reloads saved daily status every minute. The development

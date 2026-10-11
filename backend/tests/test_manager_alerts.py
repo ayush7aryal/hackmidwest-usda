@@ -114,7 +114,9 @@ def test_all_assigned_managers_receive_private_envelopes_and_claim_is_committed(
     ('DELAYED_OPENING', signals(alert=alert('2026-10-12T13:00:00Z', '2026-10-12T16:00:00Z'))),
     ('EARLY_DISMISSAL', signals(alert=alert('2026-10-12T20:00:00Z', '2026-10-12T23:00:00Z'))),
 ])
-def test_each_disruption_posture_triggers_but_normal_does_not(db_path, monkeypatch, manager_provider, posture, data):
+@pytest.mark.parametrize('scheduled', [False, True])
+def test_each_disruption_posture_triggers_but_normal_does_not(db_path, monkeypatch, manager_provider, posture, data, scheduled):
+    monkeypatch.setenv('MANAGER_SCHEDULED_UPDATES_ENABLED', 'true')
     context = policy_context(LOCATION, data, NOW)
     monkeypatch.setattr(evaluator.tools, 'fetch_signals', lambda *args: data)
     monkeypatch.setattr(evaluator, 'policy_context', lambda *args: context)
@@ -122,7 +124,7 @@ def test_each_disruption_posture_triggers_but_normal_does_not(db_path, monkeypat
         posture=context['posture'], reason='TEST ONLY: deterministic input threshold crossed.', confidence=.7,
         affected_start=context['affected_start'], affected_end=context['affected_end'], evidence=context['evidence'],
         what_would_change=['Updated sources'], uncertainty='Synthetic test'))
-    result = evaluator.evaluate(db_path, 1)
+    result = evaluator.evaluate(db_path, 1, scheduled=scheduled)
     assert result['state'] == 'COMPLETED'
     row = saved(db_path, result['decision_id'])
     assert row['posture'] == posture
@@ -170,9 +172,9 @@ def test_scheduled_check_uses_assigned_managers_and_never_employee_send(db_path,
         assert db.execute('SELECT COUNT(*) FROM decisions WHERE manager_alert_sent_at IS NOT NULL').fetchone()[0] == 2
 
 
-def test_opted_in_scheduled_updates_include_unchanged_and_normal(db_path, evaluation_sources, manager_provider, monkeypatch):
+def test_opted_in_scheduled_updates_include_unchanged_non_normal(db_path, evaluation_sources, manager_provider, monkeypatch):
     monkeypatch.setenv('MANAGER_SCHEDULED_UPDATES_ENABLED', 'true')
-    first = evaluator.evaluate(db_path, 1, scheduled=True)
+    assert evaluator.evaluate(db_path, 1, scheduled=True)['state'] == 'COMPLETED'
     second = evaluator.evaluate(db_path, 1, scheduled=True)
     assert len(manager_provider['calls']) == 2
     second_row = saved(db_path, second['decision_id'])
@@ -181,13 +183,32 @@ def test_opted_in_scheduled_updates_include_unchanged_and_normal(db_path, evalua
     assert 'Scheduled update:' in second_row['manager_alert']['template']['subject']
     assert 'Previous status: TELEWORK. Recommended status: TELEWORK.' in second_row['manager_alert']['template']['body']
     assert not second_row['sent_at'] and second_row['manager_status'] == 'PENDING'
+
+
+@pytest.mark.parametrize('previous', ['NORMAL', 'TELEWORK', 'CLOSED'])
+def test_normal_scheduled_result_updates_database_without_email(db_path, manager_provider, monkeypatch, previous):
+    monkeypatch.setenv('MANAGER_SCHEDULED_UPDATES_ENABLED', 'true')
+    data = signals()
+    context = policy_context(LOCATION, data, NOW)
+    monkeypatch.setattr(evaluator.tools, 'fetch_signals', lambda *args: data)
+    monkeypatch.setattr(evaluator, 'policy_context', lambda *args: context)
+    monkeypatch.setattr(evaluator.agent, 'recommend', lambda *args: Recommendation(
+        posture='NORMAL', reason='TEST ONLY: no disruption threshold crossed.', confidence=.7,
+        affected_start=context['affected_start'], affected_end=context['affected_end'], evidence=context['evidence'],
+        what_would_change=['Updated sources'], uncertainty='Synthetic test'))
     with closing(connect(db_path)) as db, db:
-        row = dict(db.execute('SELECT * FROM decisions WHERE id=?', (first['decision_id'],)).fetchone())
-        row.update(posture='NORMAL')
-        location = json.loads(row['alternatives_json'])['facility_snapshot'] | {'status': 'NORMAL'}
-        alert, submission = manager_alerts.prepare_alert(db, row, location, scheduled=True)
-    assert alert['status'] == 'IN_PROGRESS' and submission
-    assert 'Recommended status: NORMAL.' in alert['template']['body']
+        db.execute('UPDATE locations SET status=?, last_checked_at=NULL WHERE id=1', (previous,))
+    result = evaluator.evaluate(db_path, 1, scheduled=True)
+    assert result['state'] == 'COMPLETED'
+    row = saved(db_path, result['decision_id'])
+    assert row['posture'] == 'NORMAL' and row['manager_alert']['status'] == 'SUPPRESSED'
+    assert 'Normal operations' in row['manager_alert']['reason']
+    assert not row['manager_alert_sent_at'] and not row['sent_at']
+    with closing(connect(db_path)) as db:
+        facility = db.execute('SELECT status,last_checked_at FROM locations WHERE id=1').fetchone()
+        assert facility['status'] == 'NORMAL' and facility['last_checked_at']
+        manager_alerts.notify_manager(db, row['id'], scheduled=True)
+    assert not manager_provider['calls']
 
 
 def test_manager_identity_is_authenticated_and_current(client, headers, db_path):

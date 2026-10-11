@@ -52,10 +52,12 @@ def store_alert(db, decision_id: int, alternatives: dict, alert: dict) -> None:
 
 
 def prepare_alert(db, row: dict, location: dict, scheduled: bool = False) -> tuple[dict, tuple | None]:
-    """Check the exact transition and construct a manager-only delivery."""
+    """Email only non-normal advice; scheduled summaries can repeat that advice."""
+    if row['posture'] == 'NORMAL':
+        return {'status': 'SUPPRESSED', 'reason': 'Normal operations; no automatic manager email needed.'}, None
     alert = {'status': 'SUPPRESSED', 'reason': 'No NORMAL-to-disruption status change.'}
     summary = scheduled and os.environ.get('MANAGER_SCHEDULED_UPDATES_ENABLED', 'false').lower() == 'true'
-    if not summary and (location['status'] != 'NORMAL' or row['posture'] == 'NORMAL'):
+    if not summary and location['status'] != 'NORMAL':
         return alert, None
     alert = {'status': 'FAILED'}
     managers = [dict(m) for m in db.execute(
@@ -80,7 +82,7 @@ def prepare_alert(db, row: dict, location: dict, scheduled: bool = False) -> tup
 
 
 def notify_manager(db, decision_id: int, scheduled: bool = False) -> dict:
-    """Claim once after a committed NORMAL-to-disruption evaluation, then submit."""
+    """Claim eligible non-normal manager mail once after a committed evaluation."""
     with db:
         db.execute('BEGIN IMMEDIATE')
         row = dict(db.execute('SELECT * FROM decisions WHERE id = ?', (decision_id,)).fetchone())

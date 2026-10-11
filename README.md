@@ -269,7 +269,8 @@ remain blocked without that confirmation.
   work; busy checks retry on the next tick. Forced fresh startup checks are opt-in.
   Daily NORMAL-to-disruption transitions email assigned managers when enabled.
   `MANAGER_SCHEDULED_UPDATES_ENABLED=true` also sends manager summaries after each
-  completed scheduled refresh, including unchanged and NORMAL statuses.
+  completed non-normal scheduled refresh, even when that status is unchanged.
+  NORMAL results update the database without automatically emailing managers.
   Seven-day planning prepares future shift drafts; it does not
   change current status or automatically email anyone. The scheduler never sends
   employee emails.
