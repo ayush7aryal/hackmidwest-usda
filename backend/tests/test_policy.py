@@ -38,7 +38,7 @@ def test_all_five_postures_are_grounded_in_actual_inputs(data, posture):
     result = policy_context(LOCATION, data, NOW)
     assert result["posture"] == posture
     assert result["evidence"]
-    assert all(row["policy_version"] == "demo-office-v3" for row in result["thresholds"])
+    assert all(row["policy_version"] == "demo-office-v4" for row in result["thresholds"])
 
 
 def test_missing_sources_dont_invent_an_all_clear():

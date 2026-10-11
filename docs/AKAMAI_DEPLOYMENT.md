@@ -282,7 +282,7 @@ three-hour cadence inside the API container; this host timer only manages TLS.
 2. Edit location ID, name, coordinates or hours; run **Check next 7 days**.
    Open each affected date/shift draft and review its recipients and text. Use
    **Evaluate today** for the single-day facility status.
-3. Inspect real source URLs/timestamps, modeled AQI labeling and policy rules.
+3. Inspect real source URLs/timestamps, observed versus modeled AQI labeling and policy rules.
 4. Review every inclusion/exclusion; try facility-wide scope for remote staff.
 5. Edit subject/body, confirm essential-staff instructions, and click
    **Approve and send email** to approve and submit to the selected employees.

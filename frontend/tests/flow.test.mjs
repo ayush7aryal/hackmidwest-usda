@@ -565,6 +565,21 @@ test('evidence opens to concise choices with technical detail collapsed', async 
   assert.equal(outsideClosedDetails(panel.querySelector('.policy-list')), false)
 })
 
+test('AirNow observations remain distinct from modeled future AQI', async () => {
+  fixture.decision.evidence = [
+    { source: 'AirNow', url: 'https://www.airnowapi.org/aq/observation/current/ziplatLong', observed_at: '2026-10-11T05:00:00Z', value: { us_aqi: 175, pollutant: 'PM2.5', site_name: 'Synthetic monitor', modeled: false, used_for_policy: false } },
+    { source: 'Open-Meteo / CAMS', url: 'https://air-quality-api.open-meteo.com/test', observed_at: '2026-10-14T13:00:00Z', value: { us_aqi: 45, modeled: true } },
+  ]
+  await mount('#decision/14')
+  const panel = document.querySelector('.evidence-panel')
+  assert.equal(panel.open, false)
+  assert.match(panel.textContent, /Observed AQI · 175/)
+  assert.match(panel.textContent, /Modeled AQI · 45/)
+  assert.match(panel.textContent, /Synthetic monitor/)
+  assert.match(panel.textContent, /preliminary, not an onsite sensor/)
+  assert.match(panel.textContent, /outside this assessment’s action window/)
+})
+
 test('expired assessment asks for historical demo consent before approval and sending', async () => {
   fixture.decision.affected_start = '2020-01-06T14:00:00Z'
   fixture.decision.affected_end = '2020-01-06T22:00:00Z'

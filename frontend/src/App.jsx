@@ -304,7 +304,9 @@ function DecisionEvidence({ detail, timezone }) {
     <details className="disclosure"><summary>Sources ({detail.evidence.length})</summary>
       <div className="evidence-grid">{detail.evidence.map((row, index) => <article className="evidence" key={index}>
         <a href={row.url} target="_blank" rel="noreferrer">{row.source} ↗</a><p className="help">{when(row.observed_at, timezone)}</p>
-        {row.value?.modeled && <Badge>Modeled AQI</Badge>}<details><summary>Technical source data</summary><pre>{JSON.stringify(row.value, null, 2)}</pre></details>
+        {row.value?.modeled && <Badge>Modeled AQI · {row.value.us_aqi}</Badge>}
+        {row.source === 'AirNow' && <><Badge>Observed AQI · {row.value.us_aqi}</Badge><p className="help">{row.value.pollutant} · {row.value.site_name || row.value.reporting_area}. Nearby monitor NowCast; preliminary, not an onsite sensor.</p>{!row.value.used_for_policy && <p className="help">Current snapshot only; outside this assessment’s action window.</p>}</>}
+        <details><summary>Technical source data</summary><pre>{JSON.stringify(row.value, null, 2)}</pre></details>
       </article>)}</div>
     </details>
     <details className="disclosure"><summary>Policy thresholds ({detail.thresholds.length})</summary>

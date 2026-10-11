@@ -222,7 +222,11 @@ remain blocked without that confirmation.
   facilities, 80 staff and six shifts without deleting existing records.
 - Two read-only `@tool` functions: `get_nws_weather` and `get_air_quality`. Requests
   have timeouts/backoff; NWS discovery URLs stay on its official API host.
-  Open-Meteo/CAMS AQI is labeled modeled, not a verified sensor reading.
+  With `AIRNOW_API_KEY` configured, the AQI tool also fetches observed NowCast AQI
+  from AirNow's current `/aq/observation/current/ziplatLong` service. The older
+  `/aq/observation/latLong/current/` service retired October 1, 2026. Nearby
+  monitoring-site readings are preliminary, not an onsite facility sensor.
+  Open-Meteo/CAMS forecasts remain separately labeled modeled for future dates.
 - One Strands adviser receives compact evidence and versioned demo policy. It
   generates posture, explanation, confidence, uncertainty and change conditions.
   The backend attaches original evidence and exact impact times, validates posture
@@ -242,7 +246,21 @@ remain blocked without that confirmation.
   forecast periods with sustained wind >=40 mph; this is an app-defined demo
   threshold. Forecast thunderstorms always add a dated manager-review warning
   and do not by themselves mandate an automatic schedule change.
-- `demo-office-v3` retains every NWS alert in agent evidence and records why each
+- `demo-office-v4` also applies the same AQI categories to fresh AirNow NowCast
+  observations. Its **app-defined precaution** lasts at most one hour after fetch
+  and ends sooner when the reading reaches three hours old. That duration is a
+  demo freshness policy, not an EPA prediction or closure mandate. Observations
+  outside a date's action window remain labeled background evidence and cannot
+  trigger that day's recipients. Normal observations never erase a later high
+  modeled forecast. AirNow time labels mark the end of the observation hour;
+  the supplied standard/daylight abbreviation is converted to UTC explicitly.
+  Missing keys, empty coverage, stale readings and provider errors are shown as
+  unavailable, while the independent modeled forecast can still be used.
+  Set `AIRNOW_API_KEY` privately in `.env` and recreate the API container to load
+  it. API keys are removed from evidence URLs and httpx request logs. See the
+  [AirNow web services](https://docs.airnowapi.org/webservices) and
+  [observation / NowCast definitions](https://docs.airnowapi.org/aq101).
+- The policy retains every NWS alert in agent evidence and records why each
   does or does not trigger a schedule change. Overlapping advisories below the
   automatic trigger require manager review and cap confidence at 0.5. The
   dashboard and decision view show alert details, timing and NWS instructions.

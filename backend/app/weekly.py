@@ -10,7 +10,7 @@ from app.evaluator import save_decision
 from app.db import utc_now
 from app.models import Recommendation
 from app.recipients import DAYS, filter_roster, load_roster, local_boundary
-from app.thresholds import forecast_wind_mph, operating_window, policy_context, timestamp
+from app.thresholds import forecast_wind_mph, observed_aqi_context, operating_window, policy_context, timestamp
 
 RANK = {"NORMAL": 0, "DELAYED_OPENING": 1, "EARLY_DISMISSAL": 1, "TELEWORK": 2, "CLOSED": 3}
 
@@ -91,6 +91,11 @@ def window_reason(group: dict, signals: dict) -> str:
            if timestamp(item["observed_at"]) < end and timestamp(item["observed_at"]) + timedelta(hours=1) > start]
     if aqi and max(aqi) >= 151:
         hazards.append(f"modeled US AQI up to {max(aqi):g}")
+    observed, _, _, _ = observed_aqi_context(signals["air_quality"], start, end)
+    for entry in observed:
+        point = entry["value"]
+        if point["used_for_policy"] and point["us_aqi"] >= 151:
+            hazards.append(f"AirNow observed {point['pollutant']} NowCast AQI {point['us_aqi']:g}; short-term demo precaution")
     return (f"Your {group['shift_name']} shift on {group['date']} overlaps this affected window. "
             f"Source evidence: {'; '.join(hazards)}. The app-defined demo policy recommends "
             f"{group['posture'].replace('_', ' ')} for this window.")

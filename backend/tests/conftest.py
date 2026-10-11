@@ -5,6 +5,12 @@ from app.main import create_app
 from seed import seed
 
 
+@pytest.fixture(autouse=True)
+def isolate_airnow_key(monkeypatch):
+    """Tests opt into a synthetic key; never call AirNow using local credentials."""
+    monkeypatch.delenv("AIRNOW_API_KEY", raising=False)
+
+
 @pytest.fixture
 def db_path(tmp_path):
     path = str(tmp_path / "facility.db")

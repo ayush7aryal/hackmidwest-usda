@@ -7,7 +7,7 @@ from datetime import UTC, datetime, time, timedelta
 import re
 from zoneinfo import ZoneInfo
 
-POLICY_VERSION = "demo-office-v3"
+POLICY_VERSION = "demo-office-v4"
 AQI_GUIDANCE = "https://www.airnow.gov/aqi/aqi-basics/"
 NWS_GUIDANCE = "https://www.weather.gov/documentation/services-web-api"
 
@@ -102,6 +102,34 @@ def assess_weather_alert(alert: dict, start: datetime, end: datetime) -> tuple[t
                   "Observed/Likely schedule-change trigger. Manager must review local impacts."), True
 
 
+def observed_aqi_context(aqi: dict, start: datetime, end: datetime) -> tuple[list, list, list, list]:
+    """Bound observed AQI precautions to current hours, never to future-day forecasts."""
+    observations = aqi.get("observations")
+    evidence, thresholds, candidates, warnings = [], [], [], []
+    if observations is None:  # Existing saved snapshots predate AirNow support.
+        return evidence, thresholds, candidates, warnings
+    if not observations["available"]:
+        warnings.append(observations.get("error", "AirNow observed AQI unavailable; forecasts remain modeled."))
+        return evidence, thresholds, candidates, warnings
+    fetched = timestamp(observations["fetched_at"])
+    for point in observations["points"]:
+        observed = timestamp(point["observed_at"])
+        expires = min(timestamp(point["valid_until"]), observed + timedelta(hours=3), fetched + timedelta(hours=1))
+        left, right = max(start, fetched), min(end, expires)
+        usable = fetched - timedelta(hours=3) < observed <= fetched and left < right
+        evidence.append({"source": "AirNow", "url": observations["source_urls"][0],
+                         "observed_at": point["observed_at"], "value": point | {"used_for_policy": usable}})
+        if usable:
+            value = point["us_aqi"]
+            thresholds.append(rule("Observed US AQI", "TELEWORK >=151; CLOSED >=301; current precaution <=1h after fetch, reading age <3h",
+                                   f"{value:g} ({point['pollutant']})", f"{value - 151:+g} from telework trigger", AQI_GUIDANCE))
+            if value >= 151:
+                candidates.append(("CLOSED" if value >= 301 else "TELEWORK", left, right))
+    if observations.get("rejected_rows"):
+        warnings.append("Some AirNow pollutant readings were missing, stale or invalid and were excluded.")
+    return evidence, thresholds, candidates, warnings
+
+
 def policy_context(location: dict, signals: dict, now: datetime) -> dict:
     """Derive bounded, evidence-backed policy inputs independently of the model."""
     start, end = operating_window(location, now)
@@ -145,7 +173,7 @@ def policy_context(location: dict, signals: dict, now: datetime) -> dict:
             if candidate:
                 candidates.append(candidate)
     aqi_ok = False
-    if aqi["available"]:
+    if aqi.get("forecast_available", aqi["available"]):
         points = [p for p in aqi["forecast"] if timestamp(p["observed_at"]) < end
                   and timestamp(p["observed_at"]) + timedelta(hours=1) > start]
         aqi_ok = covers_window([(timestamp(p["observed_at"]), timestamp(p["observed_at"]) + timedelta(hours=1)) for p in points], start, end)
@@ -165,6 +193,11 @@ def policy_context(location: dict, signals: dict, now: datetime) -> dict:
         warnings.append("NWS weather coverage unavailable or incomplete; no weather all-clear.")
     if not aqi_ok:
         warnings.append("Modeled air-quality coverage unavailable or incomplete.")
+    observed_evidence, observed_thresholds, observed_candidates, observed_warnings = observed_aqi_context(aqi, start, end)
+    evidence.extend(observed_evidence)
+    thresholds.extend(observed_thresholds)
+    candidates.extend(observed_candidates)
+    warnings.extend(observed_warnings)
     if not candidates and not weather_ok:
         raise ValueError("INSUFFICIENT_DATA: NWS coverage cannot support an all-clear and AQI alone cannot justify disruption.")
     if not thresholds:

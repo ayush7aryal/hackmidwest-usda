@@ -11,6 +11,7 @@ import httpx
 from strands import tool
 
 from app.db import utc_now
+from app.airnow import fetch_observations
 
 AQI_ENDPOINT = "https://air-quality-api.open-meteo.com/v1/air-quality"
 
@@ -23,7 +24,7 @@ def fetch_signals(latitude: float, longitude: float) -> dict:
         return {"weather": weather.result(), "air_quality": air_quality.result()}
 
 
-def get_json(url: str, headers: dict | None = None) -> dict:
+def get_json(url: str, headers: dict | None = None) -> dict | list:
     """Retry timeouts, throttling and server errors; never follow arbitrary redirects."""
     with httpx.Client(timeout=httpx.Timeout(10, connect=5), headers=headers) as client:
         for attempt in range(3):
@@ -31,8 +32,8 @@ def get_json(url: str, headers: dict | None = None) -> dict:
                 response = client.get(url)
                 response.raise_for_status()
                 data = response.json()
-                if not isinstance(data, dict):
-                    raise ValueError("Source returned a non-object response")
+                if not isinstance(data, (dict, list)):
+                    raise ValueError("Source returned invalid JSON data")
                 return data
             except (httpx.TimeoutException, httpx.NetworkError, httpx.HTTPStatusError) as error:
                 if isinstance(error, httpx.HTTPStatusError):
@@ -118,14 +119,8 @@ def get_nws_weather(latitude: float, longitude: float, include_forecast: bool = 
     return result
 
 
-@tool
-def get_air_quality(latitude: float, longitude: float) -> dict:
-    """Fetch modeled US AQI and particulate forecasts from configured Open-Meteo.
-
-    Args:
-        latitude: Facility latitude in decimal degrees.
-        longitude: Facility longitude in decimal degrees.
-    """
+def get_aqi_forecast(latitude: float, longitude: float) -> dict:
+    """Fetch clearly labeled modeled hourly forecasts independently of observations."""
     endpoint = os.environ.get("AQI_API_URL", AQI_ENDPOINT)
     url = endpoint + "?" + urlencode({"latitude": latitude, "longitude": longitude,
         "hourly": "us_aqi,pm2_5,pm10", "timezone": "UTC", "timeformat": "unixtime", "forecast_days": 7})
@@ -140,7 +135,7 @@ def get_air_quality(latitude: float, longitude: float) -> dict:
             observed = datetime.fromtimestamp(timestamp, UTC)
             aqi = hourly["us_aqi"][index]
             if now - timedelta(hours=1) <= observed <= now + timedelta(days=7) and aqi is not None:
-                if not isinstance(aqi, (int, float)) or not math.isfinite(aqi) or aqi < 0:
+                if not isinstance(aqi, (int, float)) or isinstance(aqi, bool) or not math.isfinite(aqi) or aqi < 0:
                     raise ValueError("AQI source returned an invalid value")
                 points.append({"observed_at": observed.isoformat(), "us_aqi": aqi,
                                "pm2_5": hourly.get("pm2_5", [None] * len(hourly["time"]))[index],
@@ -152,3 +147,23 @@ def get_air_quality(latitude: float, longitude: float) -> dict:
                 "pollutant_units": "µg/m³", "attribution": "Open-Meteo and Copernicus Atmosphere Monitoring Service"}
     except (httpx.HTTPError, ValueError, KeyError, TypeError, IndexError, OverflowError) as error:
         return unavailable("Open-Meteo / CAMS", [url], error)
+
+
+@tool
+def get_air_quality(latitude: float, longitude: float) -> dict:
+    """Fetch AirNow observed NowCast AQI and separate modeled Open-Meteo forecasts.
+
+    Args:
+        latitude: Facility latitude in decimal degrees.
+        longitude: Facility longitude in decimal degrees.
+    """
+    try:
+        valid_coordinates(latitude, longitude)
+    except ValueError as error:
+        return unavailable("Air quality", [], error)
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        forecast_job = pool.submit(get_aqi_forecast, latitude, longitude)
+        observation_job = pool.submit(fetch_observations, latitude, longitude, get_json)
+        forecast, observations = forecast_job.result(), observation_job.result()
+    return forecast | {"available": forecast["available"] or observations["available"],
+                       "forecast_available": forecast["available"], "observations": observations}
